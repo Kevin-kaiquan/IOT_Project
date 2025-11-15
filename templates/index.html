@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Mushroom Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+  :root{--bg:#0b1020;--ink:#e7ecff;--muted:#9fb0d8;--card:#121a33;--accent:#7aa2ff}
+  *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
+  .wrap{max-width:1180px;margin:22px auto;padding:0 16px}
+  h1{margin:0 0 6px;font-size:28px;font-weight:800}
+  .sub{color:var(--muted);margin-bottom:14px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .card{background:var(--card);border-radius:16px;padding:14px;box-shadow:0 4px 16px rgba(0,0,0,.35)}
+  .row{display:flex;align-items:center;gap:8px}
+  .value{font-size:34px;font-weight:800;margin:4px 0}
+  button{border:0;border-radius:12px;padding:8px 14px;font-weight:700;cursor:pointer;background:#1d2a52;color:#cfe0ff}
+  .ok{background:var(--accent);color:#fff}
+  .chip{font-size:12px;padding:4px 8px;border-radius:12px;background:#1b2240;color:#b6c5f3}
+  canvas{width:100%!important;height:280px!important}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Mushroom Environment Dashboard</h1>
+  <div class="sub">Updates every <span id="interval"></span> seconds</div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="row">
+        <div style="font-weight:700">Current CO₂</div>
+        <div id="co2src" class="chip">source: --</div>
+        <div class="chip" id="atom">Atomizer: --</div>
+      </div>
+      <div class="value" id="co2">-- ppm</div>
+      <div class="row" style="margin-top:8px">
+        <button id="on" class="ok">Atomizer ON</button>
+        <button id="off">OFF</button>
+      </div>
+      <div style="margin-top:12px">
+        <canvas id="co2Chart"></canvas>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row"><div style="font-weight:700">Probe Temperatures (1-Wire)</div></div>
+      <div class="row" style="gap:12px;margin:6px 0 6px">
+        <div class="chip" id="t1c">T1: -- °C</div>
+        <div class="chip" id="t2c">T2: -- °C</div>
+      </div>
+      <canvas id="tempChart"></canvas>
+    </div>
+
+    <div class="card">
+      <div class="row"><div style="font-weight:700">Humidity (SHT4x)</div></div>
+      <div class="value" id="rh">-- %RH</div>
+      <canvas id="rhChart"></canvas>
+    </div>
+
+    <div class="card">
+      <div class="row"><div style="font-weight:700">Light (VELM7700)</div></div>
+      <div class="value" id="light">-- %</div>
+      <canvas id="lightChart"></canvas>
+    </div>
+  </div>
+</div>
+
+<script>
+const SAMPLE_INTERVAL = {{ sample_interval|safe }};
+document.getElementById('interval').textContent = SAMPLE_INTERVAL;
+
+// --- charts ---
+const tsLabels = [];
+const maxPoints = 60; // 约3分钟
+const co2Data = []; const t1Data=[]; const t2Data=[]; const rhData=[]; const lightData=[];
+
+function makeLine(ctx, label, color) {
+  return new Chart(ctx, {
+    type:'line',
+    data:{ labels: tsLabels, datasets:[{ label, data:[], fill:false, tension:0.25 }] },
+    options:{ plugins:{legend:{labels:{color:'#cfe0ff'}}},
+      scales:{
+        x:{ ticks:{color:'#9fb0d8'} , grid:{color:'rgba(255,255,255,.06)'} },
+        y:{ ticks:{color:'#9fb0d8'} , grid:{color:'rgba(255,255,255,.06)'} }
+      }
+    }
+  });
+}
+
+const co2Chart = makeLine(document.getElementById('co2Chart'), 'CO₂ (ppm)');
+const tempChart = new Chart(document.getElementById('tempChart'), {
+  type:'line',
+  data:{ labels: tsLabels, datasets:[
+    {label:'T1 (°C)', data:t1Data, fill:false, tension:0.25},
+    {label:'T2 (°C)', data:t2Data, fill:false, tension:0.25}
+  ]},
+  options:{ plugins:{legend:{labels:{color:'#cfe0ff'}}},
+    scales:{ x:{ticks:{color:'#9fb0d8'},grid:{color:'rgba(255,255,255,.06)'}},
+             y:{ticks:{color:'#9fb0d8'},grid:{color:'rgba(255,255,255,.06)'}} }
+  }
+});
+const rhChart = makeLine(document.getElementById('rhChart'), 'RH (%)');
+const lightChart = makeLine(document.getElementById('lightChart'), 'Light (%)');
+
+// --- atomizer buttons ---
+document.getElementById('on').addEventListener('click', ()=>sendAtom('on'));
+document.getElementById('off').addEventListener('click',()=>sendAtom('off'));
+async function sendAtom(state){
+  try{
+    const r = await fetch('/api/atomizer', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({state})});
+    const j = await r.json();
+    if(j.ok) document.getElementById('atom').textContent = 'Atomizer: ' + j.state;
+  }catch(_){}
+}
+
+// --- fetch & update ---
+function pushPoint(arr, v){ arr.push(v); if(arr.length>maxPoints) arr.shift(); }
+function pushLabel(){
+  const t = new Date().toLocaleTimeString().slice(0,8);
+  tsLabels.push(t); if(tsLabels.length>maxPoints) tsLabels.shift();
+}
+
+async function tick(){
+  try{
+    const r = await fetch('/api/data');
+    const j = await r.json();
+    const n = j.now || {};
+
+    // 数字
+    document.getElementById('co2').textContent = (n.co2_ppm!=null? Math.round(n.co2_ppm):'--') + ' ppm';
+    document.getElementById('co2src').textContent = 'source: ' + (j.co2_source || 'scd41');
+    document.getElementById('t1c').textContent = 'T1: ' + (n.temp1_c!=null? n.temp1_c.toFixed(2):'--') + ' °C';
+    document.getElementById('t2c').textContent = 'T2: ' + (n.temp2_c!=null? n.temp2_c.toFixed(2):'--') + ' °C';
+    document.getElementById('rh').textContent  = (n.rh_air!=null? n.rh_air.toFixed(1):'--') + ' %RH';
+    document.getElementById('light').textContent = (n.light!=null? n.light.toFixed(1):'--') + ' lux';
+    document.getElementById('atom').textContent = 'Atomizer: ' + (j.atomizer || '--');
+
+    // 折线
+    pushLabel();
+    pushPoint(co2Data, n.co2_ppm ?? null);
+    pushPoint(t1Data, n.temp1_c ?? null);
+    pushPoint(t2Data, n.temp2_c ?? null);
+    pushPoint(rhData, n.rh_air ?? null);
+    pushPoint(lightData, n.light ?? null);
+
+    co2Chart.data.datasets[0].data = co2Data;
+    co2Chart.update('none');
+
+    tempChart.data.datasets[0].data = t1Data;
+    tempChart.data.datasets[1].data = t2Data;
+    tempChart.update('none');
+
+    rhChart.data.datasets[0].data = rhData;
+    rhChart.update('none');
+
+    lightChart.data.datasets[0].data = lightData;
+    lightChart.update('none');
+  }catch(e){
+    // ignore
+  }
+}
+
+tick();
+setInterval(tick, SAMPLE_INTERVAL*1000);
+</script>
+</body>
+</html>
