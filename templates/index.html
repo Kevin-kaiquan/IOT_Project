@@ -3,83 +3,162 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>Mushroom Dashboard</title>
+<title>Mushroom Vision Dashboard</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <style>
-  :root{--bg:#0b1020;--ink:#e7ecff;--muted:#9fb0d8;--card:#121a33;--accent:#7aa2ff}
-  *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
-  .wrap{max-width:1180px;margin:22px auto;padding:0 16px}
-  h1{margin:0 0 6px;font-size:28px;font-weight:800}
-  .sub{color:var(--muted);margin-bottom:14px}
-  .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-  .card{background:var(--card);border-radius:16px;padding:14px;box-shadow:0 4px 16px rgba(0,0,0,.35)}
-  .row{display:flex;align-items:center;gap:8px}
-  .value{font-size:34px;font-weight:800;margin:4px 0}
-  button{border:0;border-radius:12px;padding:8px 14px;font-weight:700;cursor:pointer;background:#1d2a52;color:#cfe0ff}
-  .ok{background:var(--accent);color:#fff}
-  .chip{font-size:12px;padding:4px 8px;border-radius:12px;background:#1b2240;color:#b6c5f3}
-  canvas{width:100%!important;height:280px!important}
+  :root{
+    --bg:#060814;--ink:#eef2ff;--muted:#9da8c6;--card:#0f172a;--accent:#7aa2ff;--accent-2:#22d3ee;
+    --border:rgba(255,255,255,0.08);--success:#16a34a;--warn:#f59e0b;--danger:#ef4444
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(circle at 10% 10%,rgba(124,58,237,.16),transparent 30%),radial-gradient(circle at 90% 0,rgba(34,211,238,.14),transparent 25%),var(--bg);color:var(--ink);font-family:'Inter',system-ui,-apple-system,'Segoe UI',Roboto,Arial,sans-serif;}
+  .wrap{max-width:1300px;margin:0 auto;padding:28px 16px 60px}
+  header.hero{display:flex;justify-content:space-between;align-items:center;gap:24px;margin-bottom:20px}
+  h1{margin:6px 0;font-size:32px;font-weight:800}
+  .eyebrow{letter-spacing:.08em;color:var(--accent-2);font-weight:700;font-size:12px;text-transform:uppercase}
+  .sub{color:var(--muted);margin:4px 0 0;font-size:15px}
+  .pill{background:rgba(122,162,255,.12);padding:10px 14px;border-radius:999px;color:#dce6ff;font-weight:700;font-size:13px;display:inline-flex;align-items:center;gap:8px;border:1px solid var(--border)}
+  .grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));margin-bottom:16px}
+  .card{background:linear-gradient(135deg,rgba(122,162,255,.14),rgba(15,23,42,.9));border:1px solid var(--border);border-radius:18px;padding:16px;box-shadow:0 10px 35px rgba(0,0,0,.35)}
+  .card h3{margin:0 0 4px;font-size:17px;font-weight:800}
+  .muted{color:var(--muted);font-size:13px;margin:0 0 8px}
+  .value{font-size:36px;font-weight:800;margin:4px 0}
+  .chip{padding:6px 10px;border-radius:12px;background:rgba(255,255,255,.06);color:var(--ink);font-size:12px;font-weight:700;border:1px solid var(--border)}
+  .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  button{border:0;border-radius:12px;padding:10px 14px;font-weight:800;cursor:pointer;background:#1e293b;color:var(--ink);border:1px solid var(--border);transition:all .2s ease}
+  button.ok{background:var(--accent);color:#0b1228;box-shadow:0 10px 25px rgba(122,162,255,.35)}
+  button:hover{transform:translateY(-1px);box-shadow:0 10px 20px rgba(0,0,0,.3)}
+  canvas{width:100%!important;height:260px!important}
+  .section-title{font-size:20px;font-weight:800;margin:18px 0 10px;display:flex;align-items:center;gap:10px}
+  .section-title span{color:var(--muted);font-size:14px;font-weight:600}
+  .vision-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px}
+  .vision-card{background:linear-gradient(145deg,rgba(34,211,238,.14),rgba(15,23,42,.92));border:1px solid var(--border);border-radius:18px;overflow:hidden;box-shadow:0 10px 30px rgba(0,0,0,.35);display:flex;flex-direction:column}
+  .vision-header{padding:14px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;gap:12px}
+  .vision-header .title{font-weight:800;font-size:16px}
+  .status-dot{width:10px;height:10px;border-radius:50%;background:var(--warn)}
+  .status-dot.ok{background:var(--success)}
+  .status-dot.down{background:var(--danger)}
+  .vision-body{padding:14px 16px;display:grid;grid-template-columns:1fr;gap:12px}
+  .preview{background:#01060f;border:1px solid var(--border);border-radius:12px;overflow:hidden;display:flex;align-items:center;justify-content:center;min-height:200px}
+  .preview img{width:100%;display:block}
+  .vision-meta{display:flex;flex-wrap:wrap;gap:8px}
+  .pill-soft{background:rgba(255,255,255,.06);border:1px solid var(--border);padding:6px 10px;border-radius:10px;font-size:12px;color:var(--muted)}
+  .stat-line{display:flex;justify-content:space-between;align-items:center;font-weight:700;font-size:14px;padding:8px 10px;border-radius:10px;background:rgba(255,255,255,.03);border:1px solid var(--border)}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>Mushroom Environment Dashboard</h1>
-  <div class="sub">Updates every <span id="interval"></span> seconds</div>
+  <header class="hero">
+    <div>
+      <div class="eyebrow">Raspberry Pi Zero 2 W · Smart Grow Tent</div>
+      <h1>Dual-Camera Mushroom Dashboard</h1>
+      <p class="sub">环境感知 + 香菇识别 + 污染预警，每 <span id="interval"></span> 秒刷新。</p>
+    </div>
+    <div class="pill">
+      <span>Model folder:</span>
+      <code id="modelDir">/model</code>
+    </div>
+  </header>
 
   <div class="grid">
     <div class="card">
-      <div class="row">
-        <div style="font-weight:700">Current CO₂</div>
-        <div id="co2src" class="chip">source: --</div>
-        <div class="chip" id="atom">Atomizer: --</div>
-      </div>
+      <h3>CO₂ & Atomizer</h3>
+      <p class="muted">SCD41 读数 + 雾化器快速控制</p>
       <div class="value" id="co2">-- ppm</div>
-      <div class="row" style="margin-top:8px">
+      <div class="row" style="margin-bottom:8px">
+        <span class="chip" id="co2src">source: --</span>
+        <span class="chip" id="atom">Atomizer: --</span>
+      </div>
+      <div class="row" style="margin-top:4px;margin-bottom:10px">
         <button id="on" class="ok">Atomizer ON</button>
         <button id="off">OFF</button>
       </div>
-      <div style="margin-top:12px">
-        <canvas id="co2Chart"></canvas>
-      </div>
+      <canvas id="co2Chart"></canvas>
     </div>
 
     <div class="card">
-      <div class="row"><div style="font-weight:700">Probe Temperatures (1-Wire)</div></div>
-      <div class="row" style="gap:12px;margin:6px 0 6px">
-        <div class="chip" id="t1c">T1: -- °C</div>
-        <div class="chip" id="t2c">T2: -- °C</div>
+      <h3>Probe Temperatures</h3>
+      <p class="muted">DS18B20 温度探针（T1/T2）</p>
+      <div class="row" style="gap:10px;margin:6px 0">
+        <span class="chip" id="t1c">T1: -- °C</span>
+        <span class="chip" id="t2c">T2: -- °C</span>
       </div>
       <canvas id="tempChart"></canvas>
     </div>
 
     <div class="card">
-      <div class="row"><div style="font-weight:700">Humidity (SHT4x)</div></div>
+      <h3>Humidity</h3>
+      <p class="muted">SHT4x 湿度（用于 GPIO17 喷雾控制）</p>
       <div class="value" id="rh">-- %RH</div>
       <canvas id="rhChart"></canvas>
     </div>
 
     <div class="card">
-      <div class="row"><div style="font-weight:700">Light (VELM7700)</div></div>
-      <div class="value" id="light">-- %</div>
+      <h3>Light</h3>
+      <p class="muted">VEML7700 光照度 · 触发补光 LED</p>
+      <div class="value" id="light">-- lux</div>
       <canvas id="lightChart"></canvas>
+    </div>
+  </div>
+
+  <div class="section-title">双摄像头实时检测 <span>香菇品质 + 污染源识别</span></div>
+  <div class="vision-grid">
+    <div class="vision-card" id="shiitake-card">
+      <div class="vision-header">
+        <div class="title">Shiitake Monitor</div>
+        <div class="row" style="gap:6px">
+          <div class="status-dot" id="shiitake-dot"></div>
+          <span class="pill-soft" id="shiitake-model">model: --</span>
+        </div>
+      </div>
+      <div class="vision-body">
+        <div class="preview"><img id="shiitake-img" alt="shiitake preview"/></div>
+        <div class="vision-meta">
+          <span class="chip" id="shiitake-label">Label: --</span>
+          <span class="chip" id="shiitake-score">Confidence: --</span>
+          <span class="chip" id="shiitake-time">Updated: --</span>
+        </div>
+        <div class="stat-line"><span>Status</span><span id="shiitake-status">未启动</span></div>
+      </div>
+    </div>
+
+    <div class="vision-card" id="contaminant-card">
+      <div class="vision-header">
+        <div class="title">Contamination Watch</div>
+        <div class="row" style="gap:6px">
+          <div class="status-dot" id="contaminant-dot"></div>
+          <span class="pill-soft" id="contaminant-model">model: --</span>
+        </div>
+      </div>
+      <div class="vision-body">
+        <div class="preview"><img id="contaminant-img" alt="contamination preview"/></div>
+        <div class="vision-meta">
+          <span class="chip" id="contaminant-label">Label: --</span>
+          <span class="chip" id="contaminant-score">Confidence: --</span>
+          <span class="chip" id="contaminant-time">Updated: --</span>
+        </div>
+        <div class="stat-line"><span>Status</span><span id="contaminant-status">未启动</span></div>
+      </div>
     </div>
   </div>
 </div>
 
 <script>
 const SAMPLE_INTERVAL = {{ sample_interval|safe }};
+const VISION_INTERVAL = {{ vision_interval|safe }} * 1000;
 document.getElementById('interval').textContent = SAMPLE_INTERVAL;
 
 // --- charts ---
 const tsLabels = [];
-const maxPoints = 60; // 约3分钟
+const maxPoints = 60;
 const co2Data = []; const t1Data=[]; const t2Data=[]; const rhData=[]; const lightData=[];
 
 function makeLine(ctx, label, color) {
   return new Chart(ctx, {
     type:'line',
-    data:{ labels: tsLabels, datasets:[{ label, data:[], fill:false, tension:0.25 }] },
+    data:{ labels: tsLabels, datasets:[{ label, data:[], fill:false, tension:0.25, borderColor: color||'#7aa2ff' }] },
     options:{ plugins:{legend:{labels:{color:'#cfe0ff'}}},
+      elements:{point:{radius:0}},
       scales:{
         x:{ ticks:{color:'#9fb0d8'} , grid:{color:'rgba(255,255,255,.06)'} },
         y:{ ticks:{color:'#9fb0d8'} , grid:{color:'rgba(255,255,255,.06)'} }
@@ -88,20 +167,20 @@ function makeLine(ctx, label, color) {
   });
 }
 
-const co2Chart = makeLine(document.getElementById('co2Chart'), 'CO₂ (ppm)');
+const co2Chart = makeLine(document.getElementById('co2Chart'), 'CO₂ (ppm)', '#7aa2ff');
 const tempChart = new Chart(document.getElementById('tempChart'), {
   type:'line',
   data:{ labels: tsLabels, datasets:[
-    {label:'T1 (°C)', data:t1Data, fill:false, tension:0.25},
-    {label:'T2 (°C)', data:t2Data, fill:false, tension:0.25}
+    {label:'T1 (°C)', data:t1Data, fill:false, tension:0.25, borderColor:'#22d3ee'},
+    {label:'T2 (°C)', data:t2Data, fill:false, tension:0.25, borderColor:'#a78bfa'}
   ]},
-  options:{ plugins:{legend:{labels:{color:'#cfe0ff'}}},
+  options:{ plugins:{legend:{labels:{color:'#cfe0ff'}}}, elements:{point:{radius:0}},
     scales:{ x:{ticks:{color:'#9fb0d8'},grid:{color:'rgba(255,255,255,.06)'}},
              y:{ticks:{color:'#9fb0d8'},grid:{color:'rgba(255,255,255,.06)'}} }
   }
 });
-const rhChart = makeLine(document.getElementById('rhChart'), 'RH (%)');
-const lightChart = makeLine(document.getElementById('lightChart'), 'Light (%)');
+const rhChart = makeLine(document.getElementById('rhChart'), 'RH (%)', '#34d399');
+const lightChart = makeLine(document.getElementById('lightChart'), 'Light (lux)', '#f97316');
 
 // --- atomizer buttons ---
 document.getElementById('on').addEventListener('click', ()=>sendAtom('on'));
@@ -111,7 +190,7 @@ async function sendAtom(state){
     const r = await fetch('/api/atomizer', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({state})});
     const j = await r.json();
     if(j.ok) document.getElementById('atom').textContent = 'Atomizer: ' + j.state;
-  }catch(_){}
+  }catch(_){ }
 }
 
 // --- fetch & update ---
@@ -121,13 +200,12 @@ function pushLabel(){
   tsLabels.push(t); if(tsLabels.length>maxPoints) tsLabels.shift();
 }
 
-async function tick(){
+async function tickSensors(){
   try{
     const r = await fetch('/api/data');
     const j = await r.json();
     const n = j.now || {};
 
-    // 数字
     document.getElementById('co2').textContent = (n.co2_ppm!=null? Math.round(n.co2_ppm):'--') + ' ppm';
     document.getElementById('co2src').textContent = 'source: ' + (j.co2_source || 'scd41');
     document.getElementById('t1c').textContent = 'T1: ' + (n.temp1_c!=null? n.temp1_c.toFixed(2):'--') + ' °C';
@@ -136,7 +214,6 @@ async function tick(){
     document.getElementById('light').textContent = (n.light!=null? n.light.toFixed(1):'--') + ' lux';
     document.getElementById('atom').textContent = 'Atomizer: ' + (j.atomizer || '--');
 
-    // 折线
     pushLabel();
     pushPoint(co2Data, n.co2_ppm ?? null);
     pushPoint(t1Data, n.temp1_c ?? null);
@@ -144,25 +221,51 @@ async function tick(){
     pushPoint(rhData, n.rh_air ?? null);
     pushPoint(lightData, n.light ?? null);
 
-    co2Chart.data.datasets[0].data = co2Data;
-    co2Chart.update('none');
-
-    tempChart.data.datasets[0].data = t1Data;
-    tempChart.data.datasets[1].data = t2Data;
-    tempChart.update('none');
-
-    rhChart.data.datasets[0].data = rhData;
-    rhChart.update('none');
-
-    lightChart.data.datasets[0].data = lightData;
-    lightChart.update('none');
-  }catch(e){
-    // ignore
-  }
+    co2Chart.data.datasets[0].data = co2Data; co2Chart.update('none');
+    tempChart.data.datasets[0].data = t1Data; tempChart.data.datasets[1].data = t2Data; tempChart.update('none');
+    rhChart.data.datasets[0].data = rhData; rhChart.update('none');
+    lightChart.data.datasets[0].data = lightData; lightChart.update('none');
+  }catch(e){ }
 }
 
-tick();
-setInterval(tick, SAMPLE_INTERVAL*1000);
+function updateVisionCard(key, data){
+  const dot = document.getElementById(`${key}-dot`);
+  const status = document.getElementById(`${key}-status`);
+  const labelEl = document.getElementById(`${key}-label`);
+  const scoreEl = document.getElementById(`${key}-score`);
+  const timeEl = document.getElementById(`${key}-time`);
+  const modelEl = document.getElementById(`${key}-model`);
+  const imgEl = document.getElementById(`${key}-img`);
+
+  if(!data){
+    status.textContent = '等待数据';
+    dot.className = 'status-dot down';
+    return;
+  }
+  modelEl.textContent = 'model: ' + (data.model || '--');
+  if(data.frame_b64){ imgEl.src = `data:image/jpeg;base64,${data.frame_b64}`; }
+  labelEl.textContent = 'Label: ' + (data.label || '--');
+  scoreEl.textContent = 'Confidence: ' + (data.confidence? (data.confidence*100).toFixed(1)+'%':'--');
+  timeEl.textContent = 'Updated: ' + (data.updated_at? new Date(data.updated_at*1000).toLocaleTimeString() : '--');
+  status.textContent = data.ok ? '运行中' : (data.message || '未就绪');
+  dot.className = 'status-dot ' + (data.ok? 'ok': 'down');
+}
+
+async function tickVision(){
+  try{
+    const r = await fetch('/api/vision');
+    const j = await r.json();
+    if(j.model_dir) document.getElementById('modelDir').textContent = j.model_dir;
+    updateVisionCard('shiitake', j.shiitake);
+    updateVisionCard('contaminant', j.contaminant);
+  }catch(e){ }
+}
+
+// initial kicks
+ tickSensors();
+ setInterval(tickSensors, SAMPLE_INTERVAL*1000);
+ tickVision();
+ setInterval(tickVision, Math.max(1800, VISION_INTERVAL || 2000));
 </script>
 </body>
 </html>

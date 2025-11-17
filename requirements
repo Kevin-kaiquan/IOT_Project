@@ -1,3 +1,6 @@
 Flask>=3.0
 smbus2>=0.4
 RPi.GPIO>=0.7
+numpy>=1.26
+opencv-python-headless>=4.8
+tflite-runtime>=2.14

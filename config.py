@@ -1,3 +1,17 @@
+# ------- Paths / Vision -------
+import os
+
+MODEL_DIR = os.path.join(os.path.dirname(__file__), "model")
+SHIITAKE_MODEL_FILE = "shiitake_detector.tflite"
+SHIITAKE_LABEL_FILE = "shiitake_labels.txt"
+CONTAM_MODEL_FILE = "contaminant_detector.tflite"
+CONTAM_LABEL_FILE = "contaminant_labels.txt"
+CAMERA_TARGET_INDEX = 0
+CAMERA_CONTAM_INDEX = 1
+VISION_INTERVAL_SEC = 2.0
+VISION_FRAME_WIDTH = 640
+VISION_FRAME_HEIGHT = 480
+
 # ------- Atomizer -------
 ATOMIZER_PIN = 17
 ATOMIZER_ACTIVE_HIGH = False     # 你的雾化器是低电平触发

@@ -68,6 +68,18 @@ OLED_ADDR   = getattr(CFG, "OLED_ADDR", 0x3C)
 OLED_ROTATE = getattr(CFG, "OLED_ROTATE", 0)
 OLED_FPS    = getattr(CFG, "OLED_FPS", 20)
 
+# 双摄像头 & 模型配置
+MODEL_DIR = getattr(CFG, "MODEL_DIR", os.path.join(ROOT, "model"))
+SHIITAKE_MODEL_FILE = getattr(CFG, "SHIITAKE_MODEL_FILE", "shiitake_detector.tflite")
+SHIITAKE_LABEL_FILE = getattr(CFG, "SHIITAKE_LABEL_FILE", "shiitake_labels.txt")
+CONTAM_MODEL_FILE = getattr(CFG, "CONTAM_MODEL_FILE", "contaminant_detector.tflite")
+CONTAM_LABEL_FILE = getattr(CFG, "CONTAM_LABEL_FILE", "contaminant_labels.txt")
+CAMERA_TARGET_INDEX = getattr(CFG, "CAMERA_TARGET_INDEX", 0)
+CAMERA_CONTAM_INDEX = getattr(CFG, "CAMERA_CONTAM_INDEX", 1)
+VISION_INTERVAL_SEC = getattr(CFG, "VISION_INTERVAL_SEC", 2.0)
+VISION_FRAME_WIDTH = getattr(CFG, "VISION_FRAME_WIDTH", 640)
+VISION_FRAME_HEIGHT = getattr(CFG, "VISION_FRAME_HEIGHT", 480)
+
 # ---- 日志 ----
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 log = logging.getLogger("app")
@@ -76,6 +88,7 @@ log = logging.getLogger("app")
 from actuators.atomizer import Atomizer
 from services.sampler import Sampler
 from services.oled import OledDisplay
+from services.vision import DualCameraService
 from sensors.EnvironmentController import DeviceController
 
 # 雾化器（GPIO17），注意：我们后面会用 SHT4x 的湿度自动控制它
@@ -92,6 +105,21 @@ device_controller = DeviceController(HEATER_PIN, FAN_PIN, LED_PIN)
 # OLED 显示
 oled = OledDisplay(bus=OLED_BUS, addr=OLED_ADDR, rotate=OLED_ROTATE, fps=OLED_FPS)
 
+# 视觉检测：shiitake 与污染源两个 USB 摄像头
+vision_service = DualCameraService(
+    model_dir=MODEL_DIR,
+    target_camera_index=CAMERA_TARGET_INDEX,
+    contamination_camera_index=CAMERA_CONTAM_INDEX,
+    target_model_name=SHIITAKE_MODEL_FILE,
+    target_label_file=SHIITAKE_LABEL_FILE,
+    contamination_model_name=CONTAM_MODEL_FILE,
+    contamination_label_file=CONTAM_LABEL_FILE,
+    interval_sec=VISION_INTERVAL_SEC,
+    frame_size=(VISION_FRAME_WIDTH, VISION_FRAME_HEIGHT),
+)
+vision_service.start()
+atexit.register(vision_service.stop)
+
 # ---- Flask app ----
 app = Flask(__name__, template_folder="templates", static_folder="static")
 
@@ -99,7 +127,11 @@ app = Flask(__name__, template_folder="templates", static_folder="static")
 # ======================= Web 路由 =======================
 @app.route("/")
 def index():
-    return render_template("index.html", sample_interval=SAMPLE_INTERVAL_SEC)
+    return render_template(
+        "index.html",
+        sample_interval=SAMPLE_INTERVAL_SEC,
+        vision_interval=VISION_INTERVAL_SEC,
+    )
 
 
 @app.route("/api/data")
@@ -160,6 +192,12 @@ def api_oled_text():
     sec = float(request.args.get("sec") or 2)
     oled.flash(text, sec)
     return jsonify(ok=True)
+
+
+@app.route("/api/vision")
+def api_vision():
+    """返回双摄像头检测的最新结果与预览帧。"""
+    return jsonify(vision_service.snapshot())
 
 
 # ======================= 环境控制核心逻辑 =======================
