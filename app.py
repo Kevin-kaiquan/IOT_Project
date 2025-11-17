@@ -50,6 +50,8 @@ except Exception:
     CFG = _CFG()
 
 SAMPLE_INTERVAL_SEC = getattr(CFG, "SAMPLE_INTERVAL_SEC", 3)
+WX_OVERRIDE_SECONDS = getattr(CFG, "WX_OVERRIDE_SECONDS", 300)
+WX_MAX_OVERRIDE_SECONDS = getattr(CFG, "WX_MAX_OVERRIDE_SECONDS", 3600)
 
 # 环境控制用的 setpoint / 阈值（如未在 config.py 里定义，则用默认值）
 TEMP_SETPOINT      = getattr(CFG, "TEMP_SETPOINT", 22.0)   # 加热目标温度（°C）
@@ -61,6 +63,16 @@ LIGHT_LOW_THRESHOLD = getattr(CFG, "LIGHT_LOW_THRESHOLD", 50.0)  # lux，低于�
 # SHT4x 控制 GPIO17（雾化器 / 喷雾器）用的湿度阈值
 HUMID_LOW_THRESHOLD  = getattr(CFG, "HUMID_LOW_THRESHOLD", 55.0)
 HUMID_HIGH_THRESHOLD = getattr(CFG, "HUMID_HIGH_THRESHOLD", 65.0)
+
+# 目标生长环境（用于前端差异提示）
+IDEAL_ENVIRONMENT = {
+    "temp_c": TEMP_SETPOINT,
+    "humidity": (HUMID_LOW_THRESHOLD + HUMID_HIGH_THRESHOLD) / 2,
+    "co2_ppm": (CO2_LOW_THRESHOLD + CO2_HIGH_THRESHOLD) / 2,
+    "light_lux": LIGHT_LOW_THRESHOLD,
+}
+
+VALID_WX_DEVICES = {"heater", "fan", "led", "atomizer"}
 
 # OLED 配置（如未定义则用默认）
 OLED_BUS    = getattr(CFG, "OLED_BUS", 1)
@@ -92,6 +104,9 @@ device_controller = DeviceController(HEATER_PIN, FAN_PIN, LED_PIN)
 # OLED 显示
 oled = OledDisplay(bus=OLED_BUS, addr=OLED_ADDR, rotate=OLED_ROTATE, fps=OLED_FPS)
 
+# 微信小程序远程控制的手动指令缓存
+manual_overrides = {}
+
 # ---- Flask app ----
 app = Flask(__name__, template_folder="templates", static_folder="static")
 
@@ -99,7 +114,11 @@ app = Flask(__name__, template_folder="templates", static_folder="static")
 # ======================= Web 路由 =======================
 @app.route("/")
 def index():
-    return render_template("index.html", sample_interval=SAMPLE_INTERVAL_SEC)
+    return render_template(
+        "index.html",
+        sample_interval=SAMPLE_INTERVAL_SEC,
+        ideal_environment=IDEAL_ENVIRONMENT,
+    )
 
 
 @app.route("/api/data")
@@ -162,6 +181,84 @@ def api_oled_text():
     return jsonify(ok=True)
 
 
+def _purge_expired_overrides(now: Optional[float] = None) -> None:
+    now = now or time.time()
+    expired = [k for k, v in manual_overrides.items() if v.get("until", 0) <= now]
+    for key in expired:
+        manual_overrides.pop(key, None)
+
+
+def _serialize_overrides(now: Optional[float] = None) -> dict:
+    now = now or time.time()
+    return {
+        name: {
+            "state": bool(info.get("state")),
+            "seconds_left": max(0, int(info.get("until", 0) - now)),
+        }
+        for name, info in manual_overrides.items()
+    }
+
+
+def _apply_override(device: str, state: bool) -> None:
+    if device == "atomizer":
+        atomizer.set(state)
+    elif device == "heater":
+        device_controller.set_heater_manual(state)
+    elif device == "fan":
+        device_controller.set_fan_manual(state)
+    elif device == "led":
+        device_controller.set_led_manual(state)
+
+
+def _apply_active_overrides(now: Optional[float] = None) -> None:
+    _purge_expired_overrides(now)
+    for dev, info in manual_overrides.items():
+        _apply_override(dev, bool(info.get("state")))
+
+
+def _current_device_states() -> dict:
+    states = device_controller.as_dict()
+    states["atomizer"] = atomizer.state
+    return states
+
+
+@app.route("/api/wx/devices", methods=["GET", "POST"])
+def api_wx_devices():
+    """
+    微信小程序使用的远程控制接口：
+      - GET  返回当前各路设备状态，以及还在生效的手动指令剩余时间；
+      - POST 下发手动开关指令，可选 seconds 指定持续时间（默认 5 分钟）。
+    """
+    now = time.time()
+    _purge_expired_overrides(now)
+
+    if request.method == "GET":
+        return jsonify(ok=True, devices=_current_device_states(), overrides=_serialize_overrides(now))
+
+    data = request.get_json(silent=True) or {}
+    dev = (data.get("device") or "").lower()
+    state = data.get("state")
+    duration = data.get("seconds")
+
+    if dev not in VALID_WX_DEVICES:
+        return jsonify(ok=False, message=f"device must be one of {sorted(VALID_WX_DEVICES)}"), 400
+    if not isinstance(state, bool):
+        return jsonify(ok=False, message="state must be boolean true/false"), 400
+
+    try:
+        seconds = float(duration) if duration is not None else float(WX_OVERRIDE_SECONDS)
+    except (TypeError, ValueError):
+        seconds = float(WX_OVERRIDE_SECONDS)
+
+    seconds = max(1.0, min(seconds, float(WX_MAX_OVERRIDE_SECONDS)))
+    manual_overrides[dev] = {"state": state, "until": now + seconds}
+
+    # 立即应用一次，避免等待后台循环
+    _apply_override(dev, state)
+
+    return jsonify(ok=True, devices=_current_device_states(), overrides=_serialize_overrides(now))
+
+
 # ======================= 环境控制核心逻辑 =======================
 def _control_atomizer_with_sht4x(rh_air: Optional[float]) -> None:
     """
@@ -220,6 +317,9 @@ def control_task():
 
         # 2) 使用 SHT4x 湿度控制 GPIO17（通过 Atomizer）
         _control_atomizer_with_sht4x(rh)
+
+        # 3) 如果有微信小程序下发的手动指令，则覆盖自动逻辑
+        _apply_active_overrides()
 
         time.sleep(SAMPLE_INTERVAL_SEC)
 

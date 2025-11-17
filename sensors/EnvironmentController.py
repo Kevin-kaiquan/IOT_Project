@@ -99,6 +99,19 @@ class DeviceController:
             self.led_on = on
             self._set_pin("led", self.led_pin, on)
 
+    # ---------------- 手动控制接口 ----------------
+    def set_heater_manual(self, on: bool) -> None:
+        """直接设置加热器状态，供远程控制等场景使用。"""
+        self._set_heater(bool(on))
+
+    def set_fan_manual(self, on: bool) -> None:
+        """直接设置风扇状态，供远程控制等场景使用。"""
+        self._set_fan(bool(on))
+
+    def set_led_manual(self, on: bool) -> None:
+        """直接设置 LED 状态，供远程控制等场景使用。"""
+        self._set_led(bool(on))
+
     # ---------------- 高层逻辑：根据数据做决策 ----------------
     def update_environment(
         self,
@@ -157,6 +170,14 @@ class DeviceController:
             lux = float(light)
             # 这里的逻辑：光线很暗 -> 开 LED，当一个“环境灯”
             self._set_led(lux < light_low)
+
+    def as_dict(self) -> dict:
+        """返回当前三路设备的开关状态，方便外部查询。"""
+        return {
+            "heater": self.heater_on,
+            "fan": self.fan_on,
+            "led": self.led_on,
+        }
 
     def cleanup(self) -> None:
         try:
