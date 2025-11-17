@@ -99,6 +99,16 @@ class DeviceController:
             self.led_on = on
             self._set_pin("led", self.led_pin, on)
 
+    # ---------------- 直接控制：提供给外部强制拉高/拉低 ----------------
+    def set_heater(self, on: bool) -> None:
+        self._set_heater(bool(on))
+
+    def set_fan(self, on: bool) -> None:
+        self._set_fan(bool(on))
+
+    def set_led(self, on: bool) -> None:
+        self._set_led(bool(on))
+
     # ---------------- 高层逻辑：根据数据做决策 ----------------
     def update_environment(
         self,
@@ -157,6 +167,15 @@ class DeviceController:
             lux = float(light)
             # 这里的逻辑：光线很暗 -> 开 LED，当一个“环境灯”
             self._set_led(lux < light_low)
+
+    # ---------------- 供 API 查询当前状态 ----------------
+    @property
+    def states(self) -> dict:
+        return {
+            "heater": "on" if self.heater_on else "off",
+            "fan": "on" if self.fan_on else "off",
+            "led": "on" if self.led_on else "off",
+        }
 
     def cleanup(self) -> None:
         try:
