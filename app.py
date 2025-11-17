@@ -62,6 +62,14 @@ LIGHT_LOW_THRESHOLD = getattr(CFG, "LIGHT_LOW_THRESHOLD", 50.0)  # lux，低于�
 HUMID_LOW_THRESHOLD  = getattr(CFG, "HUMID_LOW_THRESHOLD", 55.0)
 HUMID_HIGH_THRESHOLD = getattr(CFG, "HUMID_HIGH_THRESHOLD", 65.0)
 
+# 目标生长环境（用于前端差异提示）
+IDEAL_ENVIRONMENT = {
+    "temp_c": TEMP_SETPOINT,
+    "humidity": (HUMID_LOW_THRESHOLD + HUMID_HIGH_THRESHOLD) / 2,
+    "co2_ppm": (CO2_LOW_THRESHOLD + CO2_HIGH_THRESHOLD) / 2,
+    "light_lux": LIGHT_LOW_THRESHOLD,
+}
+
 # OLED 配置（如未定义则用默认）
 OLED_BUS    = getattr(CFG, "OLED_BUS", 1)
 OLED_ADDR   = getattr(CFG, "OLED_ADDR", 0x3C)
@@ -99,7 +107,11 @@ app = Flask(__name__, template_folder="templates", static_folder="static")
 # ======================= Web 路由 =======================
 @app.route("/")
 def index():
-    return render_template("index.html", sample_interval=SAMPLE_INTERVAL_SEC)
+    return render_template(
+        "index.html",
+        sample_interval=SAMPLE_INTERVAL_SEC,
+        ideal_environment=IDEAL_ENVIRONMENT,
+    )
 
 
 @app.route("/api/data")
