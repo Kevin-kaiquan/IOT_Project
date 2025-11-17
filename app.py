@@ -50,6 +50,7 @@ except Exception:
     CFG = _CFG()
 
 SAMPLE_INTERVAL_SEC = getattr(CFG, "SAMPLE_INTERVAL_SEC", 3)
+DEFAULT_OVERRIDE_SEC = getattr(CFG, "MANUAL_OVERRIDE_SEC", 300)
 
 # 环境控制用的 setpoint / 阈值（如未在 config.py 里定义，则用默认值）
 TEMP_SETPOINT      = getattr(CFG, "TEMP_SETPOINT", 22.0)   # 加热目标温度（°C）
@@ -90,6 +91,11 @@ from sensors.EnvironmentController import DeviceController
 atomizer = Atomizer(pin=ATOMIZER_PIN, active_high=ATOMIZER_ACTIVE_HIGH, initial=False)
 atexit.register(atomizer.cleanup)
 
+# 远程控制（含小程序）用的“临时强制状态”缓存
+_manual_overrides = {
+    # name -> {"on": bool, "expires_at": float}
+}
+
 # 采样线程：负责从 SCD41 / SHT4x / DS18B20 / VEML7700 读取数据
 sampler = Sampler(interval_sec=SAMPLE_INTERVAL_SEC)
 sampler.start()
@@ -114,6 +120,39 @@ def index():
     )
 
 
+def _cleanup_overrides() -> None:
+    """清理过期的手动指令。"""
+    now = time.time()
+    for name, info in list(_manual_overrides.items()):
+        exp = info.get("expires_at")
+        if exp is not None and exp < now:
+            _manual_overrides.pop(name, None)
+
+
+def _get_override_state(name: str) -> Optional[bool]:
+    _cleanup_overrides()
+    info = _manual_overrides.get(name)
+    if not info:
+        return None
+    return bool(info.get("on"))
+
+
+def _set_override(name: str, on: bool, duration_sec: float = DEFAULT_OVERRIDE_SEC) -> None:
+    expires_at = time.time() + float(duration_sec) if duration_sec else None
+    _manual_overrides[name] = {"on": bool(on), "expires_at": expires_at}
+
+
+def _serialize_overrides() -> dict:
+    _cleanup_overrides()
+    result = {}
+    for k, v in _manual_overrides.items():
+        result[k] = {
+            "state": "on" if v.get("on") else "off",
+            "expires_at": v.get("expires_at"),
+        }
+    return result
+
+
 @app.route("/api/data")
 def api_data():
     """
@@ -136,6 +175,8 @@ def api_data():
 
     # 把雾化器当前状态也附加给前端显示
     snap["atomizer"] = atomizer.state
+    snap["devices"] = device_controller.states
+    snap["overrides"] = _serialize_overrides()
     return jsonify(snap)
 
 
@@ -157,6 +198,55 @@ def api_atomizer():
     try:
         atomizer.set(state == "on")
         return jsonify(ok=True, state=atomizer.state)
+    except Exception as e:
+        return jsonify(ok=False, message=f"hw error: {e}"), 500
+
+
+@app.route("/api/control", methods=["GET", "POST"])
+def api_control():
+    """
+    供微信小程序或其他客户端使用的统一控制接口。
+
+    - GET 返回当前设备状态 + 手动指令剩余时间
+    - POST 接受 {device, state, duration_sec?}，会在 duration 内保持指定状态
+    """
+    if request.method == "GET":
+        return jsonify(
+            ok=True,
+            devices={**device_controller.states, "atomizer": atomizer.state},
+            overrides=_serialize_overrides(),
+        )
+
+    data = request.get_json(silent=True) or {}
+    device = (data.get("device") or "").lower()
+    state = (data.get("state") or "").lower()
+    duration = float(data.get("duration_sec") or DEFAULT_OVERRIDE_SEC)
+
+    if device not in {"heater", "fan", "led", "atomizer"}:
+        return jsonify(ok=False, message="device must be heater|fan|led|atomizer"), 400
+    if state not in {"on", "off"}:
+        return jsonify(ok=False, message="state must be on|off"), 400
+
+    try:
+        is_on = state == "on"
+        _set_override(device, is_on, duration)
+
+        if device == "heater":
+            device_controller.set_heater(is_on)
+        elif device == "fan":
+            device_controller.set_fan(is_on)
+        elif device == "led":
+            device_controller.set_led(is_on)
+        else:  # atomizer
+            atomizer.set(is_on)
+
+        return jsonify(
+            ok=True,
+            device=device,
+            state=state,
+            duration_sec=duration,
+            overrides=_serialize_overrides(),
+        )
     except Exception as e:
         return jsonify(ok=False, message=f"hw error: {e}"), 500
 
@@ -230,8 +320,24 @@ def control_task():
             light_low=LIGHT_LOW_THRESHOLD,
         )
 
+        # 如果有手动覆盖指令，优先执行
+        heater_manual = _get_override_state("heater")
+        fan_manual = _get_override_state("fan")
+        led_manual = _get_override_state("led")
+
+        if heater_manual is not None:
+            device_controller.set_heater(heater_manual)
+        if fan_manual is not None:
+            device_controller.set_fan(fan_manual)
+        if led_manual is not None:
+            device_controller.set_led(led_manual)
+
         # 2) 使用 SHT4x 湿度控制 GPIO17（通过 Atomizer）
-        _control_atomizer_with_sht4x(rh)
+        atom_manual = _get_override_state("atomizer")
+        if atom_manual is not None:
+            atomizer.set(atom_manual)
+        else:
+            _control_atomizer_with_sht4x(rh)
 
         time.sleep(SAMPLE_INTERVAL_SEC)
 
