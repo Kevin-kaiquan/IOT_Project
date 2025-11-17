@@ -13,6 +13,13 @@
   .sub{color:var(--muted);margin-bottom:14px}
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
   .card{background:var(--card);border-radius:16px;padding:14px;box-shadow:0 4px 16px rgba(0,0,0,.35)}
+  .camera-card{position:relative;overflow:hidden}
+  .camera-frame{position:relative;border-radius:12px;overflow:hidden;height:260px;background:radial-gradient(circle at 30% 40%,rgba(122,162,255,.12),transparent 35%),
+    radial-gradient(circle at 70% 60%,rgba(122,162,255,.08),transparent 40%),#080c19;border:1px solid rgba(255,255,255,.06)}
+  .camera-feed{width:100%;height:100%;background:repeating-linear-gradient(135deg,rgba(255,255,255,.03),rgba(255,255,255,.03) 6px,transparent 6px,transparent 12px)}
+  .bbox{position:absolute;inset:20% 18%;border:2px solid var(--accent);border-radius:10px;box-shadow:0 0 12px rgba(122,162,255,.45);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;pointer-events:none}
+  .bbox-label{padding:4px 10px;border-radius:999px;background:var(--accent);color:#fff;font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:.5px}
+  .bbox-diff{font-size:13px;color:var(--ink);text-align:center;max-width:90%;line-height:1.4;background:rgba(8,12,25,.7);padding:6px 10px;border-radius:10px;border:1px solid rgba(122,162,255,.4)}
   .row{display:flex;align-items:center;gap:8px}
   .value{font-size:34px;font-weight:800;margin:4px 0}
   button{border:0;border-radius:12px;padding:8px 14px;font-weight:700;cursor:pointer;background:#1d2a52;color:#cfe0ff}
@@ -25,6 +32,20 @@
 <div class="wrap">
   <h1>Mushroom Environment Dashboard</h1>
   <div class="sub">Updates every <span id="interval"></span> seconds</div>
+
+  <div class="card camera-card">
+    <div class="row" style="margin-bottom:8px">
+      <div style="font-weight:700">Target Mushroom View</div>
+      <div class="chip" id="idealSummary">Ideal: --</div>
+    </div>
+    <div class="camera-frame">
+      <div class="camera-feed" aria-label="Target mushroom camera preview"></div>
+      <div class="bbox" id="bbox">
+        <div class="bbox-label">Target</div>
+        <div class="bbox-diff" id="bboxDiff">Waiting for data…</div>
+      </div>
+    </div>
+  </div>
 
   <div class="grid">
     <div class="card">
@@ -67,13 +88,37 @@
 </div>
 
 <script>
-const SAMPLE_INTERVAL = {{ sample_interval|safe }};
+const SAMPLE_INTERVAL = {{ sample_interval|tojson }};
+const IDEAL = {{ ideal_environment|tojson }};
 document.getElementById('interval').textContent = SAMPLE_INTERVAL;
 
 // --- charts ---
 const tsLabels = [];
 const maxPoints = 60; // 约3分钟
 const co2Data = []; const t1Data=[]; const t2Data=[]; const rhData=[]; const lightData=[];
+const bboxDiffEl = document.getElementById('bboxDiff');
+const idealSummaryEl = document.getElementById('idealSummary');
+
+function formatNumber(v, digits=1){
+  return v==null? '--' : Number(v).toFixed(digits);
+}
+
+function formatDelta(value, ideal, unit, digits=1){
+  if(value==null || ideal==null) return `n/a ${unit}`;
+  const delta = value - ideal;
+  const sign = delta>0? '+' : '';
+  return `${sign}${delta.toFixed(digits)}${unit}`;
+}
+
+function updateIdealSummary(){
+  const parts = [
+    `Temp ${formatNumber(IDEAL.temp_c, 1)}°C`,
+    `Humidity ${formatNumber(IDEAL.humidity, 1)}%RH`,
+    `CO₂ ${formatNumber(IDEAL.co2_ppm, 0)}ppm`,
+    `Light ≥${formatNumber(IDEAL.light_lux, 0)} lux`,
+  ];
+  idealSummaryEl.textContent = 'Ideal: ' + parts.join(' · ');
+}
 
 function makeLine(ctx, label, color) {
   return new Chart(ctx, {
@@ -102,6 +147,30 @@ const tempChart = new Chart(document.getElementById('tempChart'), {
 });
 const rhChart = makeLine(document.getElementById('rhChart'), 'RH (%)');
 const lightChart = makeLine(document.getElementById('lightChart'), 'Light (%)');
+
+updateIdealSummary();
+
+function average(values){
+  const valid = values.filter(v=>typeof v==='number' && !Number.isNaN(v));
+  if(!valid.length) return null;
+  return valid.reduce((a,b)=>a+b,0)/valid.length;
+}
+
+function updateBoundingBox(now){
+  const tempAvg = average([now.temp1_c, now.temp2_c]);
+  const humidity = typeof now.rh_air === 'number'? now.rh_air : null;
+  const co2 = typeof now.co2_ppm === 'number'? now.co2_ppm : null;
+  const light = typeof now.light === 'number'? now.light : null;
+
+  const deltas = [
+    `Temp Δ ${formatDelta(tempAvg, IDEAL.temp_c, '°C', 1)}`,
+    `Humidity Δ ${formatDelta(humidity, IDEAL.humidity, '%RH', 1)}`,
+    `CO₂ Δ ${formatDelta(co2, IDEAL.co2_ppm, 'ppm', 0)}`,
+    `Light Δ ${formatDelta(light, IDEAL.light_lux, 'lux', 0)}`,
+  ];
+
+  bboxDiffEl.textContent = deltas.join(' · ');
+}
 
 // --- atomizer buttons ---
 document.getElementById('on').addEventListener('click', ()=>sendAtom('on'));
@@ -156,6 +225,8 @@ async function tick(){
 
     lightChart.data.datasets[0].data = lightData;
     lightChart.update('none');
+
+    updateBoundingBox(n);
   }catch(e){
     // ignore
   }
