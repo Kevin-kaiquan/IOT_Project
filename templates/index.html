@@ -20,6 +20,8 @@
   .bbox{position:absolute;inset:20% 18%;border:2px solid var(--accent);border-radius:10px;box-shadow:0 0 12px rgba(122,162,255,.45);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;pointer-events:none}
   .bbox-label{padding:4px 10px;border-radius:999px;background:var(--accent);color:#fff;font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:.5px}
   .bbox-diff{font-size:13px;color:var(--ink);text-align:center;max-width:90%;line-height:1.4;background:rgba(8,12,25,.7);padding:6px 10px;border-radius:10px;border:1px solid rgba(122,162,255,.4)}
+  .leak-row{position:absolute;left:12px;right:12px;bottom:10px;display:flex;gap:10px;justify-content:center;pointer-events:none}
+  .leak-box{flex:1;min-height:34px;border-radius:12px;background:rgba(46,201,104,.8);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;text-transform:uppercase;box-shadow:0 6px 16px rgba(0,0,0,.35)}
   .row{display:flex;align-items:center;gap:8px}
   .value{font-size:34px;font-weight:800;margin:4px 0}
   button{border:0;border-radius:12px;padding:8px 14px;font-weight:700;cursor:pointer;background:#1d2a52;color:#cfe0ff}
@@ -43,6 +45,10 @@
       <div class="bbox" id="bbox">
         <div class="bbox-label">Target</div>
         <div class="bbox-diff" id="bboxDiff">Waiting for data…</div>
+      </div>
+      <div class="leak-row" aria-label="Light leak indicators">
+        <div class="leak-box" id="leakLeft">Shielding OK</div>
+        <div class="leak-box" id="leakRight">Shielding OK</div>
       </div>
     </div>
   </div>
@@ -69,19 +75,20 @@
       <div class="row" style="gap:12px;margin:6px 0 6px">
         <div class="chip" id="t1c">T1: -- °C</div>
         <div class="chip" id="t2c">T2: -- °C</div>
+        <div class="chip" id="envTemp">Ambient: -- °C</div>
       </div>
       <canvas id="tempChart"></canvas>
     </div>
 
     <div class="card">
-      <div class="row"><div style="font-weight:700">Humidity (SHT4x)</div></div>
+      <div class="row"><div style="font-weight:700">Humidity (SCD41)</div></div>
       <div class="value" id="rh">-- %RH</div>
       <canvas id="rhChart"></canvas>
     </div>
 
     <div class="card">
       <div class="row"><div style="font-weight:700">Light (VELM7700)</div></div>
-      <div class="value" id="light">-- %</div>
+      <div class="value" id="light">-- lux</div>
       <canvas id="lightChart"></canvas>
     </div>
   </div>
@@ -98,6 +105,8 @@ const maxPoints = 60; // 约3分钟
 const co2Data = []; const t1Data=[]; const t2Data=[]; const rhData=[]; const lightData=[];
 const bboxDiffEl = document.getElementById('bboxDiff');
 const idealSummaryEl = document.getElementById('idealSummary');
+const leakBoxes = [document.getElementById('leakLeft'), document.getElementById('leakRight')];
+let lastLight = null;
 
 function formatNumber(v, digits=1){
   return v==null? '--' : Number(v).toFixed(digits);
@@ -118,6 +127,31 @@ function updateIdealSummary(){
     `Light ≥${formatNumber(IDEAL.light_lux, 0)} lux`,
   ];
   idealSummaryEl.textContent = 'Ideal: ' + parts.join(' · ');
+}
+
+function updateLeakIndicator(light){
+  let text = 'Light N/A';
+  let bg = 'rgba(123,140,255,.5)';
+  if(typeof light === 'number'){
+    if(lastLight === null){
+      text = 'Calibrating…';
+      bg = 'rgba(123,140,255,.5)';
+    }else{
+      const delta = Math.abs(light - lastLight) / Math.max(1e-3, lastLight);
+      if(delta > 0.3){
+        text = 'Light leak suspected';
+        bg = 'rgba(217,83,79,.88)';
+      }else{
+        text = 'Shielding OK';
+        bg = 'rgba(46,201,104,.85)';
+      }
+    }
+    lastLight = light;
+  }
+  leakBoxes.forEach(el=>{
+    el.textContent = text;
+    el.style.background = bg;
+  });
 }
 
 function makeLine(ctx, label, color) {
@@ -146,7 +180,7 @@ const tempChart = new Chart(document.getElementById('tempChart'), {
   }
 });
 const rhChart = makeLine(document.getElementById('rhChart'), 'RH (%)');
-const lightChart = makeLine(document.getElementById('lightChart'), 'Light (%)');
+const lightChart = makeLine(document.getElementById('lightChart'), 'Light (lux)');
 
 updateIdealSummary();
 
@@ -201,6 +235,7 @@ async function tick(){
     document.getElementById('co2src').textContent = 'source: ' + (j.co2_source || 'scd41');
     document.getElementById('t1c').textContent = 'T1: ' + (n.temp1_c!=null? n.temp1_c.toFixed(2):'--') + ' °C';
     document.getElementById('t2c').textContent = 'T2: ' + (n.temp2_c!=null? n.temp2_c.toFixed(2):'--') + ' °C';
+    document.getElementById('envTemp').textContent = 'Ambient: ' + (n.t_air_c!=null? n.t_air_c.toFixed(2):'--') + ' °C';
     document.getElementById('rh').textContent  = (n.rh_air!=null? n.rh_air.toFixed(1):'--') + ' %RH';
     document.getElementById('light').textContent = (n.light!=null? n.light.toFixed(1):'--') + ' lux';
     document.getElementById('atom').textContent = 'Atomizer: ' + (j.atomizer || '--');
@@ -226,6 +261,7 @@ async function tick(){
     lightChart.data.datasets[0].data = lightData;
     lightChart.update('none');
 
+    updateLeakIndicator(n.light);
     updateBoundingBox(n);
   }catch(e){
     // ignore

@@ -6,14 +6,10 @@ ATOMIZER_ACTIVE_HIGH = False     # 你的雾化器是低电平触发
 SAMPLE_INTERVAL_SEC = 3
 HISTORY_LIMIT = 240
 
-# ------- SCD41 (CO2 only) -------
+# ------- SCD41 (CO2 + Air T/RH) -------
 SCD41_I2C_BUS = 1
 SCD41_ADDRS = [0x62, 0x64]       # 你的板子是 0x62
-
-# ------- SHT4x (Air T/RH) -------
-SHT4X_I2C_BUS = 1
-SHT4X_ADDRS   = [0x44, 0x45]     # 常见默认 0x44；部分模块焊桥后是 0x45
-SHT4X_MIN_INTERVAL = 2.0         # 两次读取的最小间隔（秒）
+SCD41_MIN_INTERVAL = 5.0         # 读取最小间隔（秒）
 
 OLED_ENABLE   = True
 
@@ -25,7 +21,16 @@ VEML7700_I2C_ADDR = 0x10
 # 设备引脚设置（继电器控制的GPIO引脚）
 HEATER_PIN = 27      # 加热器控制引脚
 FAN_PIN = 22         # 风扇控制引脚
-LED_PIN = 24         # LED灯控制引脚
+LED_PIN = 23         # 继电器控制的补光 LED（仅在相机识别时点亮）
+
+# ------- Camera LED / detection cadence -------
+CAMERA_LED_WARMUP_SEC = 0.8
+CAMERA_DETECT_MIN_SEC = 5.0
+CAMERA_DETECT_MAX_SEC = 10.0
+
+# ------- CO2 targets for growth ventilation -------
+CO2_SAFE_TARGET = 700.0   # ppm，PID 目标
+CO2_SAFE_STOP   = 650.0   # ppm，降到此值自动停风扇
 
 # PID 控制参数
 TEMP_KP = 1.0  # 温度控制的比例系数

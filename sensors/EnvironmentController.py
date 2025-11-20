@@ -5,7 +5,7 @@ EnvironmentController / DeviceController
 本模块只负责根据**已经采到的数据**控制三样东西：
 - 加热器（通过继电器，HEATER_PIN）
 - 风扇（FAN_PIN）
-- 指示 LED（LED_PIN，对应 VEML7700 的光照）
+- 指示 LED（LED_PIN，现由相机线程按需拉高）
 
 传感器数据从 services.sampler.Sampler 那边来，由 app.py 周期性调用
 DeviceController.update_environment(...) 完成控制。
@@ -19,15 +19,14 @@ DeviceController.update_environment(...) 完成控制。
    - 如果某一个温度 None，就用另一个；都 None 就跳过，不动继电器
 
 2. 风扇 fan
-   - 只看 CO₂ 浓度 co2_ppm：
+   - 默认使用 CO₂ 浓度 co2_ppm：
        如果 CO2 > CO2_HIGH -> 打开风扇
        如果 CO2 < CO2_LOW  -> 关闭风扇
      （CO2_HIGH > CO2_LOW 形成一个简单的“滞回”，避免频繁抖动）
+   - 当相机识别到蘑菇时，app.py 会改用 PID 逻辑并在 update_environment 时
+     传入 manage_fan=False，避免与这里的阈值逻辑冲突。
 
-3. LED
-   - 只看 VEML7700 的光照值 light（单位 lux）：
-       如果 light is not None 且 light < LIGHT_LOW -> 打开 LED
-       否则关闭 LED
+LED 不再受光照阈值自动控制，改为相机采集线程或 API 强制开关。
 """
 from __future__ import annotations
 
@@ -121,7 +120,8 @@ class DeviceController:
         temp_tolerance: float = 0.5,
         co2_high: float = 1000.0,
         co2_low: float = 800.0,
-        light_low: float = 50.0,
+        manage_fan: bool = True,
+        manage_heater: bool = True,
     ) -> None:
         """
         主入口：由 app.py 周期性调用。
@@ -133,26 +133,27 @@ class DeviceController:
         """
 
         # ---- 1) 加热器：根据两个温度传感器 ----
-        avg_temp: Optional[float] = None
-        if temp1 is not None and temp2 is not None:
-            avg_temp = 0.5 * (float(temp1) + float(temp2))
-        elif temp1 is not None:
-            avg_temp = float(temp1)
-        elif temp2 is not None:
-            avg_temp = float(temp2)
+        if manage_heater:
+            avg_temp: Optional[float] = None
+            if temp1 is not None and temp2 is not None:
+                avg_temp = 0.5 * (float(temp1) + float(temp2))
+            elif temp1 is not None:
+                avg_temp = float(temp1)
+            elif temp2 is not None:
+                avg_temp = float(temp2)
 
-        if avg_temp is not None:
-            if avg_temp < temp_set - temp_tolerance:
-                # 温度偏低 → 打开加热器
-                self._set_heater(True)
-            elif avg_temp > temp_set + temp_tolerance:
-                # 温度明显高于设定 → 关闭加热器
-                self._set_heater(False)
-            # 否则落在中间“死区”，保持原状态不变
-        # 如果完全读不到温度，就保持 heater 当前状态，不瞎动
+            if avg_temp is not None:
+                if avg_temp < temp_set - temp_tolerance:
+                    # 温度偏低 → 打开加热器
+                    self._set_heater(True)
+                elif avg_temp > temp_set + temp_tolerance:
+                    # 温度明显高于设定 → 关闭加热器
+                    self._set_heater(False)
+                # 否则落在中间“死区”，保持原状态不变
+            # 如果完全读不到温度，就保持 heater 当前状态，不瞎动
 
         # ---- 2) 风扇：只看 CO₂ ----
-        if co2_ppm is not None:
+        if manage_fan and co2_ppm is not None:
             co2_val = float(co2_ppm)
             if co2_val > co2_high:
                 # CO2 很高 → 打开风扇排风
@@ -161,12 +162,6 @@ class DeviceController:
                 # CO2 已经降下来 → 关闭风扇
                 self._set_fan(False)
             # 中间区域同样保持原状态
-
-        # ---- 3) LED：只看光照 ----
-        if light is not None:
-            lux = float(light)
-            # 这里的逻辑：光线很暗 -> 开 LED，当一个“环境灯”
-            self._set_led(lux < light_low)
 
     # ---------------- 供 API 查询当前状态 ----------------
     @property
