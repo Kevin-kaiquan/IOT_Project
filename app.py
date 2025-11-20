@@ -7,10 +7,10 @@
 1. 采集部分仍由 services.sampler.Sampler 完成，不改。
 2. 环境控制逻辑：
    - 加热器（继电器）由 **两个温度探针 temp1 / temp2** 决定是否开启；
-   - 风扇由 **CO₂ 浓度** 决定是否开启；
-   - LED 由 **VEML7700 的光照值** 决定是否开启；
-   - SHT4x 的湿度 rh_air 决定是否拉高 / 拉低 **树莓派 GPIO17**（也就是 ATOMIZER_PIN），
-     通过 actuators.atomizer.Atomizer 来控制。
+   - 风扇默认由 **CO₂ 浓度** 滞回控制；若识别到目标蘑菇，会通过 PID 把 CO₂ 压到安全阈值；
+   - LED 只在摄像识别前临时点亮，不再根据光照补光；
+   - 环境湿度 rh_air 直接来自 **SCD41**，用来拉高 / 拉低 **树莓派 GPIO17**（ATOMIZER_PIN），
+     通过 actuators.atomizer.Atomizer 控制。
 
 网页 /api/data 和 /api/atomizer 的接口保持不变，这样你的前端 dashboard 可以继续使用。
 """
@@ -19,7 +19,10 @@ import sys
 import time
 import atexit
 import logging
-from typing import Optional
+import random
+import statistics
+import threading
+from typing import Optional, Callable
 
 from flask import Flask, jsonify, render_template, request
 
@@ -50,6 +53,7 @@ except Exception:
     CFG = _CFG()
 
 SAMPLE_INTERVAL_SEC = getattr(CFG, "SAMPLE_INTERVAL_SEC", 3)
+DEFAULT_OVERRIDE_SEC = getattr(CFG, "MANUAL_OVERRIDE_SEC", 300)
 
 # 环境控制用的 setpoint / 阈值（如未在 config.py 里定义，则用默认值）
 TEMP_SETPOINT      = getattr(CFG, "TEMP_SETPOINT", 22.0)   # 加热目标温度（°C）
@@ -57,8 +61,11 @@ TEMP_TOLERANCE     = getattr(CFG, "TEMP_TOLERANCE", 0.5)   # 温度允许波动
 CO2_HIGH_THRESHOLD = getattr(CFG, "CO2_HIGH_THRESHOLD", 1000.0)  # CO₂ 打开风扇阈值
 CO2_LOW_THRESHOLD  = getattr(CFG, "CO2_LOW_THRESHOLD", 800.0)    # CO₂ 关闭风扇阈值
 LIGHT_LOW_THRESHOLD = getattr(CFG, "LIGHT_LOW_THRESHOLD", 50.0)  # lux，低于此值就点亮 LED
+CO2_SAFE_TARGET = getattr(CFG, "CO2_SAFE_TARGET", 700.0)
+VISION_MIN_INTERVAL = getattr(CFG, "VISION_MIN_INTERVAL", 5.0)
+VISION_MAX_INTERVAL = getattr(CFG, "VISION_MAX_INTERVAL", 10.0)
 
-# SHT4x 控制 GPIO17（雾化器 / 喷雾器）用的湿度阈值
+# 环境湿度（SCD41 提供）控制 GPIO17（雾化器 / 喷雾器）用的阈值
 HUMID_LOW_THRESHOLD  = getattr(CFG, "HUMID_LOW_THRESHOLD", 55.0)
 HUMID_HIGH_THRESHOLD = getattr(CFG, "HUMID_HIGH_THRESHOLD", 65.0)
 
@@ -86,16 +93,139 @@ from services.sampler import Sampler
 from services.oled import OledDisplay
 from sensors.EnvironmentController import DeviceController
 
-# 雾化器（GPIO17），注意：我们后面会用 SHT4x 的湿度自动控制它
+# 雾化器（GPIO17），注意：环境控制线程会根据 SCD41 的湿度自动控制它
 atomizer = Atomizer(pin=ATOMIZER_PIN, active_high=ATOMIZER_ACTIVE_HIGH, initial=False)
 atexit.register(atomizer.cleanup)
 
-# 采样线程：负责从 SCD41 / SHT4x / DS18B20 / VEML7700 读取数据
+# 远程控制（含小程序）用的“临时强制状态”缓存
+_manual_overrides = {
+    # name -> {"on": bool, "expires_at": float}
+}
+
+
+class SimplePID:
+    def __init__(self, k_p: float, k_i: float, k_d: float, setpoint: float, output_limits=(0.0, 1.0)) -> None:
+        self.k_p = k_p
+        self.k_i = k_i
+        self.k_d = k_d
+        self.setpoint = setpoint
+        self._integral = 0.0
+        self._prev_error: Optional[float] = None
+        self.output_limits = output_limits
+
+    def reset(self) -> None:
+        self._integral = 0.0
+        self._prev_error = None
+
+    def update(self, measurement: Optional[float], dt: float) -> float:
+        if measurement is None or dt <= 0:
+            return 0.0
+        error = float(measurement) - float(self.setpoint)
+        self._integral += error * dt
+        derivative = 0.0
+        if self._prev_error is not None:
+            derivative = (error - self._prev_error) / dt
+        self._prev_error = error
+
+        output = self.k_p * error + self.k_i * self._integral + self.k_d * derivative
+        lo, hi = self.output_limits
+        return max(lo, min(hi, output))
+
+
+class LightLeakAnalyzer:
+    def __init__(self, window: int = 40, threshold_lux: float = 35.0) -> None:
+        self.window = window
+        self.threshold_lux = threshold_lux
+
+    def evaluate(self, history: list) -> dict:
+        lux_values = [h.get("light") for h in history[-self.window :] if h.get("light") is not None]
+        if len(lux_values) < 2:
+            return {
+                "status": "unknown",
+                "delta_lux": None,
+                "message": "Light history insufficient",
+                "color": "gray",
+            }
+
+        baseline = statistics.median(lux_values[:-1] or lux_values)
+        latest = lux_values[-1]
+        delta = latest - baseline
+        leak = abs(delta) >= self.threshold_lux
+
+        return {
+            "status": "leak" if leak else "ok",
+            "delta_lux": round(delta, 2),
+            "message": "Possible light leak" if leak else "Light seal OK",
+            "color": "red" if leak else "green",
+        }
+
+
+class VisionCoordinator:
+    def __init__(
+        self,
+        device_controller: DeviceController,
+        override_getter: Callable[[str], Optional[bool]],
+        interval_range: tuple,
+        led_warmup: float = 0.6,
+    ) -> None:
+        self.device_controller = device_controller
+        self.override_getter = override_getter
+        self.interval_range = interval_range
+        self.led_warmup = led_warmup
+        self._stop = threading.Event()
+        self._th: Optional[threading.Thread] = None
+        self.detections = 0
+        self.last_capture_ts: Optional[float] = None
+
+    def start(self) -> None:
+        if self._th and self._th.is_alive():
+            return
+        self._stop.clear()
+        self._th = threading.Thread(target=self._loop, name="vision-loop", daemon=True)
+        self._th.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def set_detections(self, count: int) -> None:
+        self.detections = max(0, int(count))
+
+    def _loop(self) -> None:
+        while not self._stop.is_set():
+            wait_sec = random.uniform(*self.interval_range)
+            time.sleep(wait_sec)
+            if self.override_getter("led") is not None:
+                # 手动覆盖时不抢占 LED
+                continue
+            try:
+                self.device_controller.set_led(True)
+                time.sleep(self.led_warmup)
+                self.last_capture_ts = time.time()
+            finally:
+                self.device_controller.set_led(False)
+
+    def snapshot(self) -> dict:
+        return {
+            "detections": self.detections,
+            "last_capture": self.last_capture_ts,
+            "interval_range": self.interval_range,
+        }
+
+# 采样线程：负责从 SCD41 / DS18B20 / VEML7700 读取数据
 sampler = Sampler(interval_sec=SAMPLE_INTERVAL_SEC)
 sampler.start()
 
 # 环境控制器：负责 Heater / Fan / LED 三个 GPIO
 device_controller = DeviceController(HEATER_PIN, FAN_PIN, LED_PIN)
+
+# 辅助：光漏分析、风扇 PID、视觉节奏
+light_analyzer = LightLeakAnalyzer()
+fan_pid = SimplePID(k_p=0.004, k_i=0.0008, k_d=0.0, setpoint=CO2_SAFE_TARGET, output_limits=(0.0, 1.0))
+vision_coordinator = VisionCoordinator(
+    device_controller,
+    override_getter=lambda name: _get_override_state(name),
+    interval_range=(VISION_MIN_INTERVAL, VISION_MAX_INTERVAL),
+)
 
 # OLED 显示
 oled = OledDisplay(bus=OLED_BUS, addr=OLED_ADDR, rotate=OLED_ROTATE, fps=OLED_FPS)
@@ -114,6 +244,39 @@ def index():
     )
 
 
+def _cleanup_overrides() -> None:
+    """清理过期的手动指令。"""
+    now = time.time()
+    for name, info in list(_manual_overrides.items()):
+        exp = info.get("expires_at")
+        if exp is not None and exp < now:
+            _manual_overrides.pop(name, None)
+
+
+def _get_override_state(name: str) -> Optional[bool]:
+    _cleanup_overrides()
+    info = _manual_overrides.get(name)
+    if not info:
+        return None
+    return bool(info.get("on"))
+
+
+def _set_override(name: str, on: bool, duration_sec: float = DEFAULT_OVERRIDE_SEC) -> None:
+    expires_at = time.time() + float(duration_sec) if duration_sec else None
+    _manual_overrides[name] = {"on": bool(on), "expires_at": expires_at}
+
+
+def _serialize_overrides() -> dict:
+    _cleanup_overrides()
+    result = {}
+    for k, v in _manual_overrides.items():
+        result[k] = {
+            "state": "on" if v.get("on") else "off",
+            "expires_at": v.get("expires_at"),
+        }
+    return result
+
+
 @app.route("/api/data")
 def api_data():
     """
@@ -121,6 +284,7 @@ def api_data():
     """
     snap = sampler.snapshot()
     now = snap.get("now", {}) or {}
+    snap["co2_source"] = now.get("co2_from")
 
     # 刷新 OLED
     try:
@@ -136,13 +300,18 @@ def api_data():
 
     # 把雾化器当前状态也附加给前端显示
     snap["atomizer"] = atomizer.state
+    snap["devices"] = device_controller.states
+    snap["overrides"] = _serialize_overrides()
+    snap["vision"] = vision_coordinator.snapshot()
+    snap["vision"]["led_on"] = device_controller.led_on
+    snap["light_leak"] = light_analyzer.evaluate(snap.get("history", []))
     return jsonify(snap)
 
 
 @app.route("/api/atomizer", methods=["GET", "POST"])
 def api_atomizer():
     """
-    手动开关 GPIO17（雾化器）。注意：环境控制线程也会根据 SHT4x 湿度自动控制它，
+    手动开关 GPIO17（雾化器）。注意：环境控制线程也会根据 SCD41 湿度自动控制它，
     所以这里只是「临时」指令，之后可能被自动逻辑覆盖。
     """
     if request.method == "POST":
@@ -161,6 +330,55 @@ def api_atomizer():
         return jsonify(ok=False, message=f"hw error: {e}"), 500
 
 
+@app.route("/api/control", methods=["GET", "POST"])
+def api_control():
+    """
+    供微信小程序或其他客户端使用的统一控制接口。
+
+    - GET 返回当前设备状态 + 手动指令剩余时间
+    - POST 接受 {device, state, duration_sec?}，会在 duration 内保持指定状态
+    """
+    if request.method == "GET":
+        return jsonify(
+            ok=True,
+            devices={**device_controller.states, "atomizer": atomizer.state},
+            overrides=_serialize_overrides(),
+        )
+
+    data = request.get_json(silent=True) or {}
+    device = (data.get("device") or "").lower()
+    state = (data.get("state") or "").lower()
+    duration = float(data.get("duration_sec") or DEFAULT_OVERRIDE_SEC)
+
+    if device not in {"heater", "fan", "led", "atomizer"}:
+        return jsonify(ok=False, message="device must be heater|fan|led|atomizer"), 400
+    if state not in {"on", "off"}:
+        return jsonify(ok=False, message="state must be on|off"), 400
+
+    try:
+        is_on = state == "on"
+        _set_override(device, is_on, duration)
+
+        if device == "heater":
+            device_controller.set_heater(is_on)
+        elif device == "fan":
+            device_controller.set_fan(is_on)
+        elif device == "led":
+            device_controller.set_led(is_on)
+        else:  # atomizer
+            atomizer.set(is_on)
+
+        return jsonify(
+            ok=True,
+            device=device,
+            state=state,
+            duration_sec=duration,
+            overrides=_serialize_overrides(),
+        )
+    except Exception as e:
+        return jsonify(ok=False, message=f"hw error: {e}"), 500
+
+
 @app.route("/api/oled/text")
 def api_oled_text():
     """
@@ -174,10 +392,21 @@ def api_oled_text():
     return jsonify(ok=True)
 
 
-# ======================= 环境控制核心逻辑 =======================
-def _control_atomizer_with_sht4x(rh_air: Optional[float]) -> None:
+@app.route("/api/vision/detection", methods=["POST"])
+def api_vision_detection():
     """
-    使用 SHT4x 的相对湿度 rh_air 决定是否开启 GPIO17（雾化器）。
+    外部视觉算法可以用这个接口汇报当前识别到的目标蘑菇数量。
+    """
+    data = request.get_json(silent=True) or {}
+    count = int(data.get("count") or 0)
+    vision_coordinator.set_detections(count)
+    return jsonify(ok=True, vision=vision_coordinator.snapshot())
+
+
+# ======================= 环境控制核心逻辑 =======================
+def _control_atomizer_with_humidity(rh_air: Optional[float]) -> None:
+    """
+    使用环境相对湿度 rh_air 决定是否开启 GPIO17（雾化器）。
     规则：
       rh_air < HUMID_LOW_THRESHOLD  -> 打开雾化器 (GPIO17)
       rh_air > HUMID_HIGH_THRESHOLD -> 关闭雾化器
@@ -200,11 +429,11 @@ def _control_atomizer_with_sht4x(rh_air: Optional[float]) -> None:
 
 def control_task():
     """
-    后台线程：每隔几秒读取最新样本，根据你的规则控制：
+    后台线程：每隔几秒读取最新样本，根据规则控制：
       - heater : 由 temp1_c / temp2_c 决定；
-      - fan    : 由 co2_ppm 决定；
-      - led    : 由 light 决定；
-      - atomizer(GPIO17) : 由 SHT4x 的 rh_air 决定。
+      - fan    : 默认滞回控制；若识别到目标蘑菇则用 PID 方式降低 CO₂；
+      - led    : 自动控制逻辑移除，交给 VisionCoordinator；
+      - atomizer(GPIO17) : 由环境湿度 rh_air 决定。
     """
     log.info("Environment control thread started")
     while True:
@@ -214,24 +443,56 @@ def control_task():
         co2   = now.get("co2_ppm")
         t1    = now.get("temp1_c")
         t2    = now.get("temp2_c")
-        light = now.get("light")
-        rh    = now.get("rh_air")     # SHT4x 的湿度，用来控制 GPIO17
+        rh    = now.get("rh_air")
 
-        # 1) Heater / Fan / LED 交给 DeviceController 处理
+        # 1) Heater / Fan 交给 DeviceController 处理（基础逻辑）
         device_controller.update_environment(
             temp1=t1,
             temp2=t2,
             co2_ppm=co2,
-            light=light,
             temp_set=TEMP_SETPOINT,
             temp_tolerance=TEMP_TOLERANCE,
             co2_high=CO2_HIGH_THRESHOLD,
             co2_low=CO2_LOW_THRESHOLD,
-            light_low=LIGHT_LOW_THRESHOLD,
         )
 
-        # 2) 使用 SHT4x 湿度控制 GPIO17（通过 Atomizer）
-        _control_atomizer_with_sht4x(rh)
+        # 如果有手动覆盖指令优先执行
+        heater_manual = _get_override_state("heater")
+        fan_manual = _get_override_state("fan")
+        led_manual = _get_override_state("led")
+
+        if heater_manual is not None:
+            device_controller.set_heater(heater_manual)
+        
+        detection_count = vision_coordinator.detections
+        if fan_manual is not None:
+            device_controller.set_fan(fan_manual)
+            fan_pid.reset()
+        elif detection_count > 0 and co2 is not None:
+            # 当摄像头识别到目标蘑菇时，用 PID 尝试把 CO₂ 压低到安全值
+            duty = fan_pid.update(co2, SAMPLE_INTERVAL_SEC)
+            if duty <= 0:
+                device_controller.set_fan(False)
+            elif duty >= 0.95:
+                device_controller.set_fan(True)
+            else:
+                now_slice = time.time() % SAMPLE_INTERVAL_SEC
+                device_controller.set_fan(now_slice < duty * SAMPLE_INTERVAL_SEC)
+        else:
+            # 没有目标时回落到默认策略，并在安全浓度下尽快关闭风扇
+            fan_pid.reset()
+            if detection_count == 0 and co2 is not None and co2 < CO2_HIGH_THRESHOLD:
+                device_controller.set_fan(False)
+
+        if led_manual is not None:
+            device_controller.set_led(led_manual)
+
+        # 2) 使用环境湿度控制 GPIO17（通过 Atomizer）
+        atom_manual = _get_override_state("atomizer")
+        if atom_manual is not None:
+            atomizer.set(atom_manual)
+        else:
+            _control_atomizer_with_humidity(rh)
 
         time.sleep(SAMPLE_INTERVAL_SEC)
 
@@ -239,10 +500,10 @@ def control_task():
 # 在 Flask 第一次收到请求时启动环境控制线程
 @app.before_first_request
 def _start_background_threads():
-    import threading
     th = threading.Thread(target=control_task, name="env-control", daemon=True)
     th.start()
-    log.info("Background env-control thread started")
+    vision_coordinator.start()
+    log.info("Background env-control thread started; vision loop started")
 
 
 # ======================= main =======================

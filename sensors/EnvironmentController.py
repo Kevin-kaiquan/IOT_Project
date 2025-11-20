@@ -5,7 +5,7 @@ EnvironmentController / DeviceController
 本模块只负责根据**已经采到的数据**控制三样东西：
 - 加热器（通过继电器，HEATER_PIN）
 - 风扇（FAN_PIN）
-- 指示 LED（LED_PIN，对应 VEML7700 的光照）
+- 视觉用的 LED（LED_PIN，经继电器，由上层主动点亮)
 
 传感器数据从 services.sampler.Sampler 那边来，由 app.py 周期性调用
 DeviceController.update_environment(...) 完成控制。
@@ -19,15 +19,11 @@ DeviceController.update_environment(...) 完成控制。
    - 如果某一个温度 None，就用另一个；都 None 就跳过，不动继电器
 
 2. 风扇 fan
-   - 只看 CO₂ 浓度 co2_ppm：
-       如果 CO2 > CO2_HIGH -> 打开风扇
-       如果 CO2 < CO2_LOW  -> 关闭风扇
-     （CO2_HIGH > CO2_LOW 形成一个简单的“滞回”，避免频繁抖动）
+   - 默认使用 CO₂ 浓度 co2_ppm 的滞回控制（CO2_HIGH / CO2_LOW）
+   - 当识别到目标蘑菇时，上层会用 PID 方式请求它工作，保持 CO₂ 在安全范围内
 
 3. LED
-   - 只看 VEML7700 的光照值 light（单位 lux）：
-       如果 light is not None 且 light < LIGHT_LOW -> 打开 LED
-       否则关闭 LED
+   - 仅由摄像流程主动点亮/熄灭，不再参与环境光照的自动补光
 """
 from __future__ import annotations
 
@@ -99,19 +95,27 @@ class DeviceController:
             self.led_on = on
             self._set_pin("led", self.led_pin, on)
 
+    # ---------------- 直接控制：提供给外部强制拉高/拉低 ----------------
+    def set_heater(self, on: bool) -> None:
+        self._set_heater(bool(on))
+
+    def set_fan(self, on: bool) -> None:
+        self._set_fan(bool(on))
+
+    def set_led(self, on: bool) -> None:
+        self._set_led(bool(on))
+
     # ---------------- 高层逻辑：根据数据做决策 ----------------
     def update_environment(
         self,
         temp1: Optional[float],
         temp2: Optional[float],
         co2_ppm: Optional[float],
-        light: Optional[float],
         *,
         temp_set: float = 22.0,
         temp_tolerance: float = 0.5,
         co2_high: float = 1000.0,
         co2_low: float = 800.0,
-        light_low: float = 50.0,
     ) -> None:
         """
         主入口：由 app.py 周期性调用。
@@ -119,7 +123,6 @@ class DeviceController:
         参数：
           temp1, temp2 : 两个温度探针（单位 °C）
           co2_ppm      : CO₂ 浓度（ppm）
-          light        : VEML7700 光照强度（lux）
         """
 
         # ---- 1) 加热器：根据两个温度传感器 ----
@@ -152,11 +155,14 @@ class DeviceController:
                 self._set_fan(False)
             # 中间区域同样保持原状态
 
-        # ---- 3) LED：只看光照 ----
-        if light is not None:
-            lux = float(light)
-            # 这里的逻辑：光线很暗 -> 开 LED，当一个“环境灯”
-            self._set_led(lux < light_low)
+    # ---------------- 供 API 查询当前状态 ----------------
+    @property
+    def states(self) -> dict:
+        return {
+            "heater": "on" if self.heater_on else "off",
+            "fan": "on" if self.fan_on else "off",
+            "led": "on" if self.led_on else "off",
+        }
 
     def cleanup(self) -> None:
         try:

@@ -26,6 +26,9 @@
   .ok{background:var(--accent);color:#fff}
   .chip{font-size:12px;padding:4px 8px;border-radius:12px;background:#1b2240;color:#b6c5f3}
   canvas{width:100%!important;height:280px!important}
+  .leak-strip{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+  .leak-box{padding:10px;border-radius:10px;border:1px solid rgba(255,255,255,.1);font-weight:700;text-align:center}
+  .leak-box small{display:block;font-weight:600;margin-top:4px;color:rgba(255,255,255,.7)}
 </style>
 </head>
 <body>
@@ -37,6 +40,7 @@
     <div class="row" style="margin-bottom:8px">
       <div style="font-weight:700">Target Mushroom View</div>
       <div class="chip" id="idealSummary">Ideal: --</div>
+      <div class="chip" id="visionChip">Detections: 0</div>
     </div>
     <div class="camera-frame">
       <div class="camera-feed" aria-label="Target mushroom camera preview"></div>
@@ -44,6 +48,10 @@
         <div class="bbox-label">Target</div>
         <div class="bbox-diff" id="bboxDiff">Waiting for data…</div>
       </div>
+    </div>
+    <div class="leak-strip">
+      <div class="leak-box" id="leakA">--<small>Frame A light seal</small></div>
+      <div class="leak-box" id="leakB">--<small>Frame B light seal</small></div>
     </div>
   </div>
 
@@ -69,12 +77,13 @@
       <div class="row" style="gap:12px;margin:6px 0 6px">
         <div class="chip" id="t1c">T1: -- °C</div>
         <div class="chip" id="t2c">T2: -- °C</div>
+        <div class="chip" id="tAmbient">Ambient: -- °C</div>
       </div>
       <canvas id="tempChart"></canvas>
     </div>
 
     <div class="card">
-      <div class="row"><div style="font-weight:700">Humidity (SHT4x)</div></div>
+      <div class="row"><div style="font-weight:700">Humidity (SCD41)</div></div>
       <div class="value" id="rh">-- %RH</div>
       <canvas id="rhChart"></canvas>
     </div>
@@ -98,6 +107,9 @@ const maxPoints = 60; // 约3分钟
 const co2Data = []; const t1Data=[]; const t2Data=[]; const rhData=[]; const lightData=[];
 const bboxDiffEl = document.getElementById('bboxDiff');
 const idealSummaryEl = document.getElementById('idealSummary');
+const visionChip = document.getElementById('visionChip');
+const leakA = document.getElementById('leakA');
+const leakB = document.getElementById('leakB');
 
 function formatNumber(v, digits=1){
   return v==null? '--' : Number(v).toFixed(digits);
@@ -157,13 +169,13 @@ function average(values){
 }
 
 function updateBoundingBox(now){
-  const tempAvg = average([now.temp1_c, now.temp2_c]);
+  const ambient = typeof now.t_air_c === 'number'? now.t_air_c : null;
   const humidity = typeof now.rh_air === 'number'? now.rh_air : null;
   const co2 = typeof now.co2_ppm === 'number'? now.co2_ppm : null;
   const light = typeof now.light === 'number'? now.light : null;
 
   const deltas = [
-    `Temp Δ ${formatDelta(tempAvg, IDEAL.temp_c, '°C', 1)}`,
+    `Ambient Δ ${formatDelta(ambient, IDEAL.temp_c, '°C', 1)}`,
     `Humidity Δ ${formatDelta(humidity, IDEAL.humidity, '%RH', 1)}`,
     `CO₂ Δ ${formatDelta(co2, IDEAL.co2_ppm, 'ppm', 0)}`,
     `Light Δ ${formatDelta(light, IDEAL.light_lux, 'lux', 0)}`,
@@ -195,15 +207,27 @@ async function tick(){
     const r = await fetch('/api/data');
     const j = await r.json();
     const n = j.now || {};
+    const vision = j.vision || {};
 
     // 数字
     document.getElementById('co2').textContent = (n.co2_ppm!=null? Math.round(n.co2_ppm):'--') + ' ppm';
-    document.getElementById('co2src').textContent = 'source: ' + (j.co2_source || 'scd41');
+    document.getElementById('co2src').textContent = 'source: ' + (j.co2_source || n.co2_from || 'scd41');
     document.getElementById('t1c').textContent = 'T1: ' + (n.temp1_c!=null? n.temp1_c.toFixed(2):'--') + ' °C';
     document.getElementById('t2c').textContent = 'T2: ' + (n.temp2_c!=null? n.temp2_c.toFixed(2):'--') + ' °C';
+    document.getElementById('tAmbient').textContent = 'Ambient: ' + (n.t_air_c!=null? n.t_air_c.toFixed(2):'--') + ' °C';
     document.getElementById('rh').textContent  = (n.rh_air!=null? n.rh_air.toFixed(1):'--') + ' %RH';
     document.getElementById('light').textContent = (n.light!=null? n.light.toFixed(1):'--') + ' lux';
     document.getElementById('atom').textContent = 'Atomizer: ' + (j.atomizer || '--');
+    visionChip.textContent = `Detections: ${vision.detections ?? 0}`;
+
+    const leak = j.light_leak || {};
+    const leakText = leak.message || '--';
+    const color = leak.color === 'red' ? '#c53d4b' : leak.color === 'green' ? '#3cab7a' : '#444b61';
+    [leakA, leakB].forEach(box => {
+      box.style.background = color;
+      box.style.color = '#fff';
+      box.firstChild.nodeValue = leakText;
+    });
 
     // 折线
     pushLabel();

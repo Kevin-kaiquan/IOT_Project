@@ -14,15 +14,10 @@ SCD41_I2C_BUS      = getattr(CFG, "SCD41_I2C_BUS", 1)
 SCD41_ADDRS        = getattr(CFG, "SCD41_ADDRS", [0x62, 0x64])
 SCD41_MIN_INTERVAL = getattr(CFG, "SCD41_MIN_INTERVAL", 5.0)
 
-SHT4X_I2C_BUS      = getattr(CFG, "SHT4X_I2C_BUS", 1)
-SHT4X_ADDRS        = getattr(CFG, "SHT4X_ADDRS", [0x44, 0x45])
-SHT4X_MIN_INTERVAL = getattr(CFG, "SHT4X_MIN_INTERVAL", 2.0)
-
 VEML7700_I2C_ADDR = getattr(CFG, "VEML7700_I2C_ADDR", 0x10)
 VEML7700_I2C_BUS = getattr(CFG, "VEML7700_I2C_BUS", 1)
 
 from sensors.scd41 import SCD41
-from sensors.sht4x import SHT4x
 from sensors import ds18b20
 log = logging.getLogger("sampler")
 
@@ -42,7 +37,7 @@ class Sampler:
             log.error(f"VEML7700 init failed: {e}")
             self.veml7700 = None
 
-        # --- SCD41 for CO2 only ---
+        # --- SCD41 for CO2 + ambient T/RH ---
         self.scd41: Optional[SCD41] = None
         try:
             self.scd41 = SCD41(busno=SCD41_I2C_BUS, addr=None, addr_candidates=SCD41_ADDRS)
@@ -50,16 +45,6 @@ class Sampler:
         except Exception as e:
             log.error(f"SCD41 init failed: {e}")
             self.scd41 = None
-
-        # --- SHT4x for Air T/RH ---
-        self.sht4x: Optional[SHT4x] = None
-        try:
-            self.sht4x = SHT4x(busno=SHT4X_I2C_BUS, addr=None, addr_candidates=SHT4X_ADDRS)
-            t, rh = self.sht4x.read_cached(min_interval_sec=0.0)
-            log.info(f"SHT4x prime ok: T={t:.2f}C RH={rh:.1f}%")
-        except Exception as e:
-            log.error(f"SHT4x init failed: {e}")
-            self.sht4x = None
 
         self._co2_mock = 600.0
 
@@ -71,29 +56,18 @@ class Sampler:
         self._stop.set()
         self._th.join(timeout=1.0)
 
-    def _read_co2(self) -> Tuple[float, str]:
+    def _read_co2_trh(self) -> Tuple[float, Optional[float], Optional[float], str]:
         if self.scd41:
             try:
-                co2, _, _ = self.scd41.read_cached(min_interval_sec=SCD41_MIN_INTERVAL)
-                return round(co2, 1), "scd41"
+                co2, t_air, rh_air = self.scd41.read_cached(min_interval_sec=SCD41_MIN_INTERVAL)
+                return round(co2, 1), round(t_air, 2), round(rh_air, 1), "scd41"
             except Exception as e:
                 log.warning(f"SCD41 read exception -> mock: {e}")
+        # fallback mock
         self._co2_mock = max(400.0, min(2000.0, self._co2_mock + random.uniform(-15, 15)))
-        return round(self._co2_mock, 1), "mock"
-
-    def _read_air_trh(self) -> Tuple[Optional[float], Optional[float]]:
-        if self.sht4x:
-            try:
-                t, rh = self.sht4x.read_cached(min_interval_sec=SHT4X_MIN_INTERVAL)
-                return round(t, 2), round(rh, 1)
-            except Exception as e:
-                log.warning(f"SHT4x read failed: {e}")
-                try:
-                    t, rh = self.sht4x.read_cached(min_interval_sec=0.0)
-                    return round(t, 2), round(rh, 1)
-                except Exception:
-                    pass
-        return None, None
+        base_t = 22.0 + random.uniform(-1.0, 1.0)
+        rh = 60.0 + random.uniform(-5.0, 5.0)
+        return round(self._co2_mock, 1), round(base_t, 2), round(rh, 1), "mock"
 
     def _read_probe_t(self) -> Tuple[Optional[float], Optional[float]]:
         devs = ds18b20.list_devices()
@@ -119,8 +93,7 @@ class Sampler:
     def _loop(self):
         from datetime import datetime
         while not self._stop.is_set():
-            co2, co2_src = self._read_co2()
-            t_air, rh_air = self._read_air_trh()
+            co2, t_air, rh_air, co2_src = self._read_co2_trh()
             t1, t2 = self._read_probe_t()
             light_intensity = self._read_light()  # Get light intensity from VEML7700
 
