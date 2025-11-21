@@ -6,13 +6,13 @@
 <title>Mushroom Dashboard</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <style>
-  :root{--bg:#0b1020;--ink:#e7ecff;--muted:#9fb0d8;--card:#121a33;--accent:#7aa2ff}
-  *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
+  :root{--bg:#0b1020;--ink:#e7ecff;--muted:#9fb0d8;--card:#0f1730;--card-strong:#161f3c;--accent:#7aa2ff;--accent-2:#6be4c2;--danger:#ff7a8a}
+  *{box-sizing:border-box} body{margin:0;background:radial-gradient(circle at 20% 20%,rgba(122,162,255,.06),transparent 38%),radial-gradient(circle at 80% 0,rgba(107,228,194,.06),transparent 35%),var(--bg);color:var(--ink);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
   .wrap{max-width:1180px;margin:22px auto;padding:0 16px}
   h1{margin:0 0 6px;font-size:28px;font-weight:800}
   .sub{color:var(--muted);margin-bottom:14px}
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-  .card{background:var(--card);border-radius:16px;padding:14px;box-shadow:0 4px 16px rgba(0,0,0,.35)}
+  .card{background:linear-gradient(145deg,rgba(18,26,51,.96),rgba(12,19,38,.9));border-radius:16px;padding:16px;box-shadow:0 14px 32px rgba(0,0,0,.35),inset 0 1px 0 rgba(255,255,255,.02)}
   .camera-card{position:relative;overflow:hidden}
   .camera-frame{position:relative;border-radius:12px;overflow:hidden;height:260px;background:radial-gradient(circle at 30% 40%,rgba(122,162,255,.12),transparent 35%),
     radial-gradient(circle at 70% 60%,rgba(122,162,255,.08),transparent 40%),#080c19;border:1px solid rgba(255,255,255,.06)}
@@ -23,10 +23,24 @@
   .leak-row{position:absolute;left:12px;right:12px;bottom:10px;display:flex;gap:10px;justify-content:center;pointer-events:none}
   .leak-box{flex:1;min-height:34px;border-radius:12px;background:rgba(46,201,104,.8);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;text-transform:uppercase;box-shadow:0 6px 16px rgba(0,0,0,.35)}
   .row{display:flex;align-items:center;gap:8px}
+  .spread{justify-content:space-between}
   .value{font-size:34px;font-weight:800;margin:4px 0}
   button{border:0;border-radius:12px;padding:8px 14px;font-weight:700;cursor:pointer;background:#1d2a52;color:#cfe0ff}
   .ok{background:var(--accent);color:#fff}
   .chip{font-size:12px;padding:4px 8px;border-radius:12px;background:#1b2240;color:#b6c5f3}
+  .pill{display:inline-flex;align-items:center;gap:8px;padding:6px 10px;border-radius:999px;background:rgba(26,36,68,.9);border:1px solid rgba(255,255,255,.06);color:#cfe0ff;font-size:12px}
+  .pill strong{color:#fff}
+  .device-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-top:12px}
+  .device-btn{position:relative;background:var(--card-strong);border:1px solid rgba(255,255,255,.06);color:#cfe0ff;padding:14px;border-radius:14px;box-shadow:0 10px 22px rgba(0,0,0,.28);text-align:left;transition:transform .15s ease,box-shadow .15s ease,background .2s ease,border .2s ease}
+  .device-btn .device-name{font-size:15px;font-weight:800}
+  .device-btn .device-state{font-size:13px;color:#e7ecff;margin-top:6px}
+  .device-btn .device-meta{font-size:12px;color:var(--muted)}
+  .device-btn.on{background:linear-gradient(135deg,rgba(122,162,255,.2),rgba(107,228,194,.2));border-color:rgba(122,162,255,.65);box-shadow:0 12px 26px rgba(122,162,255,.28),0 0 0 1px rgba(255,255,255,.06)}
+  .device-btn.off{background:var(--card-strong);border-color:rgba(255,255,255,.05);color:#9fb0d8}
+  .device-btn.manual{box-shadow:0 0 0 2px rgba(122,162,255,.5),0 14px 30px rgba(0,0,0,.32)}
+  .device-btn:hover{transform:translateY(-2px);box-shadow:0 14px 30px rgba(0,0,0,.35)}
+  .badge{display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,.06);border-radius:999px;padding:4px 10px;font-size:12px;color:#e7ecff}
+  .badge svg{width:14px;height:14px}
   canvas{width:100%!important;height:280px!important}
 </style>
 </head>
@@ -34,6 +48,41 @@
 <div class="wrap">
   <h1>Mushroom Environment Dashboard</h1>
   <div class="sub">Updates every <span id="interval"></span> seconds</div>
+
+  <div class="card">
+    <div class="row spread" style="gap:12px;align-items:flex-start">
+      <div>
+        <div style="font-weight:800;font-size:16px">设备手动控制</div>
+        <div class="pill" style="margin-top:6px">自动控制基于传感器，点击可手动保持 5 分钟</div>
+      </div>
+      <div class="badge" id="overrideBadge">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2 9 14l-4-4-4 4"/><path d="M21 2v6h-6"/></svg>
+        <span>自动协调中</span>
+      </div>
+    </div>
+    <div class="device-grid">
+      <button class="device-btn off" id="btn-heater" data-device="heater" data-state="off">
+        <div class="device-name">加热器</div>
+        <div class="device-state" data-role="state">关闭</div>
+        <div class="device-meta" data-role="meta">自动模式</div>
+      </button>
+      <button class="device-btn off" id="btn-fan" data-device="fan" data-state="off">
+        <div class="device-name">风扇</div>
+        <div class="device-state" data-role="state">关闭</div>
+        <div class="device-meta" data-role="meta">自动模式</div>
+      </button>
+      <button class="device-btn off" id="btn-led" data-device="led" data-state="off">
+        <div class="device-name">LED</div>
+        <div class="device-state" data-role="state">关闭</div>
+        <div class="device-meta" data-role="meta">自动模式</div>
+      </button>
+      <button class="device-btn off" id="btn-atomizer" data-device="atomizer" data-state="off">
+        <div class="device-name">雾化器</div>
+        <div class="device-state" data-role="state">关闭</div>
+        <div class="device-meta" data-role="meta">自动模式</div>
+      </button>
+    </div>
+  </div>
 
   <div class="card camera-card">
     <div class="row" style="margin-bottom:8px">
@@ -61,13 +110,8 @@
         <div class="chip" id="atom">Atomizer: --</div>
       </div>
       <div class="value" id="co2">-- ppm</div>
-      <div class="row" style="margin-top:8px">
-        <button id="on" class="ok">Atomizer ON</button>
-        <button id="off">OFF</button>
-      </div>
-      <div style="margin-top:12px">
-        <canvas id="co2Chart"></canvas>
-      </div>
+      <div class="pill" style="margin-top:8px" id="atomMeta">Atomizer: --</div>
+      <div style="margin-top:12px"><canvas id="co2Chart"></canvas></div>
     </div>
 
     <div class="card">
@@ -107,6 +151,15 @@ const bboxDiffEl = document.getElementById('bboxDiff');
 const idealSummaryEl = document.getElementById('idealSummary');
 const leakBoxes = [document.getElementById('leakLeft'), document.getElementById('leakRight')];
 let lastLight = null;
+const controlButtons = {};
+const overrideBadge = document.getElementById('overrideBadge');
+
+['heater','fan','led','atomizer'].forEach(name=>{
+  const el = document.getElementById(`btn-${name}`);
+  if(!el) return;
+  controlButtons[name] = el;
+  el.addEventListener('click', ()=>toggleDevice(name));
+});
 
 function formatNumber(v, digits=1){
   return v==null? '--' : Number(v).toFixed(digits);
@@ -206,15 +259,50 @@ function updateBoundingBox(now){
   bboxDiffEl.textContent = deltas.join(' · ');
 }
 
-// --- atomizer buttons ---
-document.getElementById('on').addEventListener('click', ()=>sendAtom('on'));
-document.getElementById('off').addEventListener('click',()=>sendAtom('off'));
-async function sendAtom(state){
+// --- 手动控制 / 覆盖 ---
+async function toggleDevice(device){
+  const el = controlButtons[device];
+  if(!el) return;
+  const current = el.dataset.state === 'on' ? 'on' : 'off';
+  const next = current === 'on' ? 'off' : 'on';
+  await sendControl(device, next);
+}
+
+async function sendControl(device, state){
   try{
-    const r = await fetch('/api/atomizer', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({state})});
+    const r = await fetch('/api/control', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({device, state})
+    });
     const j = await r.json();
-    if(j.ok) document.getElementById('atom').textContent = 'Atomizer: ' + j.state;
-  }catch(_){}
+    if(j.ok){
+      updateDeviceButtons({[device]: state}, j.overrides || {});
+    }
+  }catch(_){
+    // ignore
+  }
+}
+
+function updateDeviceButtons(states={}, overrides={}){
+  Object.entries(controlButtons).forEach(([name, el])=>{
+    const state = states[name] || el.dataset.state || 'off';
+    const manual = !!overrides[name];
+    el.dataset.state = state;
+    el.classList.toggle('on', state === 'on');
+    el.classList.toggle('off', state !== 'on');
+    el.classList.toggle('manual', manual);
+    const stateEl = el.querySelector('[data-role="state"]');
+    const metaEl = el.querySelector('[data-role="meta"]');
+    if(stateEl) stateEl.textContent = state === 'on' ? '已开启' : '关闭';
+    if(metaEl) metaEl.textContent = manual ? '手动保持中' : '自动模式';
+  });
+
+  const activeOverrides = Object.keys(overrides || {}).length;
+  if(overrideBadge){
+    overrideBadge.querySelector('span').textContent = activeOverrides ? `手动覆盖 ${activeOverrides} 个设备` : '自动协调中';
+    overrideBadge.style.background = activeOverrides ? 'rgba(122,162,255,.16)' : 'rgba(255,255,255,.06)';
+  }
 }
 
 // --- fetch & update ---
@@ -230,6 +318,10 @@ async function tick(){
     const j = await r.json();
     const n = j.now || {};
 
+    const devices = j.devices || {};
+    const states = {heater: devices.heater, fan: devices.fan, led: devices.led, atomizer: j.atomizer};
+    const overrides = j.overrides || {};
+
     // 数字
     document.getElementById('co2').textContent = (n.co2_ppm!=null? Math.round(n.co2_ppm):'--') + ' ppm';
     document.getElementById('co2src').textContent = 'source: ' + (j.co2_source || 'scd41');
@@ -239,6 +331,9 @@ async function tick(){
     document.getElementById('rh').textContent  = (n.rh_air!=null? n.rh_air.toFixed(1):'--') + ' %RH';
     document.getElementById('light').textContent = (n.light!=null? n.light.toFixed(1):'--') + ' lux';
     document.getElementById('atom').textContent = 'Atomizer: ' + (j.atomizer || '--');
+    const atomMeta = document.getElementById('atomMeta');
+    if(atomMeta) atomMeta.textContent = `Atomizer: ${j.atomizer || '--'}`;
+    updateDeviceButtons(states, overrides);
 
     // 折线
     pushLabel();
