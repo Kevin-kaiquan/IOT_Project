@@ -14,9 +14,12 @@
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
   .card{background:linear-gradient(145deg,rgba(18,26,51,.96),rgba(12,19,38,.9));border-radius:16px;padding:16px;box-shadow:0 14px 32px rgba(0,0,0,.35),inset 0 1px 0 rgba(255,255,255,.02);height:100%;display:flex;flex-direction:column}
   .camera-card{position:relative;overflow:hidden}
-  .camera-frame{position:relative;border-radius:12px;overflow:hidden;min-height:420px;background:radial-gradient(circle at 30% 40%,rgba(122,162,255,.12),transparent 35%),
-    radial-gradient(circle at 70% 60%,rgba(122,162,255,.08),transparent 40%),#080c19;border:1px solid rgba(255,255,255,.06)}
-  .camera-feed{width:100%;height:100%;background:repeating-linear-gradient(135deg,rgba(255,255,255,.03),rgba(255,255,255,.03) 6px,transparent 6px,transparent 12px)}
+  .camera-frame{position:relative;border-radius:12px;overflow:hidden;min-height:440px;background:radial-gradient(circle at 30% 40%,rgba(122,162,255,.12),transparent 35%),
+    radial-gradient(circle at 70% 60%,rgba(122,162,255,.08),transparent 40%),#080c19;border:1px solid rgba(255,255,255,.06);transition:border .2s ease,box-shadow .2s ease}
+  .camera-frame[data-view="contamination"]{background:radial-gradient(circle at 35% 35%,rgba(255,122,138,.12),transparent 35%),
+    radial-gradient(circle at 65% 70%,rgba(107,228,194,.1),transparent 45%),#0b0f1d;border-color:rgba(255,122,138,.5);box-shadow:0 12px 28px rgba(255,122,138,.18)}
+  .camera-feed{width:100%;height:100%;background:repeating-linear-gradient(135deg,rgba(255,255,255,.03),rgba(255,255,255,.03) 6px,transparent 6px,transparent 12px);transition:opacity .2s ease}
+  .camera-frame[data-view="contamination"] .camera-feed{background:repeating-linear-gradient(135deg,rgba(255,122,138,.08),rgba(255,122,138,.08) 6px,transparent 6px,transparent 12px)}
   .bbox{position:absolute;inset:20% 18%;border:2px solid var(--accent);border-radius:10px;box-shadow:0 0 12px rgba(122,162,255,.45);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;pointer-events:none}
   .bbox-label{padding:4px 10px;border-radius:999px;background:var(--accent);color:#fff;font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:.5px}
   .bbox-diff{font-size:13px;color:var(--ink);text-align:center;max-width:90%;line-height:1.4;background:rgba(8,12,25,.7);padding:6px 10px;border-radius:10px;border:1px solid rgba(122,162,255,.4)}
@@ -30,6 +33,10 @@
   .chip{font-size:12px;padding:4px 8px;border-radius:12px;background:#1b2240;color:#b6c5f3}
   .pill{display:inline-flex;align-items:center;gap:8px;padding:6px 10px;border-radius:999px;background:rgba(26,36,68,.9);border:1px solid rgba(255,255,255,.06);color:#cfe0ff;font-size:12px}
   .pill strong{color:#fff}
+  .view-toggle{display:flex;gap:8px;align-items:center}
+  .view-tab{padding:8px 12px;border-radius:10px;border:1px solid rgba(255,255,255,.08);background:rgba(27,34,64,.95);color:#cfe0ff;font-weight:700;cursor:pointer;transition:all .15s ease}
+  .view-tab.active{background:linear-gradient(135deg,rgba(122,162,255,.18),rgba(107,228,194,.22));color:#fff;border-color:rgba(122,162,255,.55);box-shadow:0 8px 18px rgba(0,0,0,.25)}
+  .view-tab:focus-visible{outline:2px solid var(--accent)}
   .device-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-top:12px}
   .device-btn{position:relative;background:var(--card-strong);border:1px solid rgba(255,255,255,.06);color:#cfe0ff;padding:14px;border-radius:14px;box-shadow:0 10px 22px rgba(0,0,0,.28);text-align:left;transition:transform .15s ease,box-shadow .15s ease,background .2s ease,border .2s ease}
   .device-btn .device-name{font-size:15px;font-weight:800}
@@ -126,14 +133,20 @@
     </div>
 
     <div class="card camera-card" data-area="camera">
-      <div class="row" style="margin-bottom:8px">
-        <div style="font-weight:700">Target Mushroom View</div>
-        <div class="chip" id="idealSummary">Ideal: --</div>
+      <div class="row spread" style="margin-bottom:8px;gap:10px">
+        <div class="row" style="gap:10px;align-items:center">
+          <div style="font-weight:700">Camera View</div>
+          <div class="chip" id="idealSummary">Ideal: --</div>
+        </div>
+        <div class="view-toggle" role="group" aria-label="Camera view toggle">
+          <button class="view-tab active" data-view="target" aria-pressed="true">Target mushroom</button>
+          <button class="view-tab" data-view="contamination" aria-pressed="false">Contamination detection</button>
+        </div>
       </div>
-      <div class="camera-frame">
-        <div class="camera-feed" aria-label="Target mushroom camera preview"></div>
+      <div class="camera-frame" data-view="target" id="cameraFrame">
+        <div class="camera-feed" aria-label="Target mushroom camera preview" id="cameraFeed"></div>
         <div class="bbox" id="bbox">
-          <div class="bbox-label">Target</div>
+          <div class="bbox-label" id="bboxLabel">Target</div>
           <div class="bbox-diff" id="bboxDiff">Waiting for data…</div>
         </div>
         <div class="leak-row" aria-label="Light leak indicators">
@@ -155,11 +168,17 @@ const tsLabels = [];
 const maxPoints = 60; // roughly 3 minutes
 const co2Data = []; const t1Data=[]; const t2Data=[]; const rhData=[]; const lightData=[];
 const bboxDiffEl = document.getElementById('bboxDiff');
+const bboxLabelEl = document.getElementById('bboxLabel');
+const cameraFrameEl = document.getElementById('cameraFrame');
+const cameraFeedEl = document.getElementById('cameraFeed');
 const idealSummaryEl = document.getElementById('idealSummary');
 const leakBoxes = [document.getElementById('leakLeft'), document.getElementById('leakRight')];
 let lastLight = null;
+let lastSnapshot = null;
+let currentView = 'target';
 const controlButtons = {};
 const overrideBadge = document.getElementById('overrideBadge');
+const viewTabs = document.querySelectorAll('.view-tab');
 
 ['heater','fan','led','atomizer'].forEach(name=>{
   const el = document.getElementById(`btn-${name}`);
@@ -168,8 +187,33 @@ const overrideBadge = document.getElementById('overrideBadge');
   el.addEventListener('click', ()=>toggleDevice(name));
 });
 
+viewTabs.forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    const view = btn.dataset.view || 'target';
+    setCameraView(view);
+  });
+});
+
 function formatNumber(v, digits=1){
   return v==null? '--' : Number(v).toFixed(digits);
+}
+
+function setCameraView(view){
+  if(!view) return;
+  currentView = view;
+  viewTabs.forEach(btn=>{
+    const active = btn.dataset.view === view;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+  });
+  if(cameraFrameEl) cameraFrameEl.dataset.view = view;
+  if(cameraFeedEl) cameraFeedEl.setAttribute('aria-label', view === 'target' ? 'Target mushroom camera preview' : 'Contamination detection camera preview');
+  if(bboxLabelEl) bboxLabelEl.textContent = view === 'target' ? 'Target' : 'Contamination';
+  if(view === 'contamination'){
+    bboxDiffEl.textContent = 'Contamination camera active — monitoring pollutants in real time.';
+  }else if(lastSnapshot){
+    updateBoundingBox(lastSnapshot);
+  }
 }
 
 function formatDelta(value, ideal, unit, digits=1){
@@ -243,6 +287,7 @@ const rhChart = makeLine(document.getElementById('rhChart'), 'RH (%)');
 const lightChart = makeLine(document.getElementById('lightChart'), 'Light (lux)');
 
 updateIdealSummary();
+setCameraView('target');
 
 function average(values){
   const valid = values.filter(v=>typeof v==='number' && !Number.isNaN(v));
@@ -251,6 +296,11 @@ function average(values){
 }
 
 function updateBoundingBox(now){
+  lastSnapshot = now;
+  if(currentView === 'contamination'){
+    bboxDiffEl.textContent = 'Contamination camera active — monitoring pollutants in real time.';
+    return;
+  }
   const tempAvg = average([now.temp1_c, now.temp2_c]);
   const humidity = typeof now.rh_air === 'number'? now.rh_air : null;
   const co2 = typeof now.co2_ppm === 'number'? now.co2_ppm : null;
