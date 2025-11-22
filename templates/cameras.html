@@ -15,22 +15,25 @@
   .card{background:linear-gradient(145deg,rgba(18,26,51,.96),rgba(12,19,38,.9));border-radius:16px;padding:16px;box-shadow:0 14px 32px rgba(0,0,0,.35);}
   .camera-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(480px,1fr));gap:14px;margin-top:12px}
   .camera-frame{position:relative;border-radius:16px;overflow:hidden;background:#050814;border:1px solid rgba(255,255,255,.08);box-shadow:0 16px 34px rgba(0,0,0,.36);}
-  .camera-feed{width:100%;height:400px;object-fit:cover;display:block;filter:contrast(1.18) saturate(1.12) brightness(1.02);image-rendering:high-quality;background:#03060f}
+  .camera-feed{width:100%;height:400px;object-fit:cover;display:block;filter:contrast(1.18) saturate(1.12) brightness(1.02);image-rendering:high-quality;background:#03060f;transition:opacity .2s ease,filter .2s ease}
   .detect-strip{position:absolute;left:12px;right:12px;bottom:12px;padding:12px 14px;border-radius:12px;background:rgba(12,19,38,.92);border:1px solid rgba(255,255,255,.12);color:#cfe0ff;font-weight:800;display:flex;align-items:center;justify-content:space-between;gap:10px;box-shadow:0 12px 28px rgba(0,0,0,.3)}
   .detect-strip.active{background:linear-gradient(135deg,rgba(122,162,255,1),rgba(107,228,194,1));color:#0b1020;border-color:rgba(255,255,255,.32);box-shadow:0 12px 28px rgba(107,228,194,.38),0 0 0 1px rgba(255,255,255,.14)}
   .detect-strip .meta{font-size:12px;font-weight:700;opacity:.9}
   .pill{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border-radius:999px;background:rgba(255,255,255,.06);color:#e7ecff;font-size:13px;border:1px solid rgba(255,255,255,.08)}
   .btn{border:0;border-radius:12px;padding:10px 14px;font-weight:800;cursor:pointer;background:var(--accent);color:#0b1020;box-shadow:0 12px 26px rgba(122,162,255,.3)}
+  .camera-frame[data-error]{border-color:rgba(255,122,138,.6);box-shadow:0 16px 34px rgba(255,122,138,.25),0 0 0 1px rgba(255,255,255,.08)}
+  .camera-frame[data-error] .camera-feed{opacity:.55;filter:grayscale(.2) contrast(1.05)}
+  .camera-frame[data-error]::after{content:attr(data-error);position:absolute;left:14px;right:14px;top:14px;padding:10px 12px;border-radius:10px;background:rgba(255,122,138,.12);border:1px solid rgba(255,122,138,.6);color:#ffc7d0;font-weight:800;backdrop-filter:blur(4px);box-shadow:0 10px 22px rgba(0,0,0,.35);}
 </style>
 </head>
 <body>
 <div class="wrap">
   <div class="row" style="justify-content:space-between;align-items:flex-start">
     <div>
-      <h1>双摄像头检测</h1>
-      <div class="sub">实时查看两个镜头，并在底部使用醒目颜色标记识别到的目标蘑菇</div>
+      <h1>Dual camera detection</h1>
+      <div class="sub">View both feeds live with bold detection banners on each frame</div>
     </div>
-    <button class="btn" onclick="window.location.href='/'">返回数据可视化</button>
+    <button class="btn" onclick="window.location.href='/'">Back to dashboard</button>
   </div>
 
   <div class="card">
@@ -107,10 +110,22 @@ function updateDetection(now, detected, count, confidence){
 async function refreshCameraFrame(){
   if(!cameraFeeds.length) return;
   const statuses = [];
+  let statusMap = new Map();
+
+  try{
+    const sr = await fetch('/api/camera/status');
+    if(sr.ok){
+      const sj = await sr.json();
+      statusMap = new Map((sj.cameras || []).map(c=>[Number(c.id), c]));
+    }
+  }catch(_){ /* ignore */ }
+
   for(const camId of cameraOrder){
     const feedEl = cameraFeeds.find(el=>Number(el.dataset.camId)===camId);
-    if(!feedEl) continue;
+    const frameEl = feedEl ? feedEl.closest('.camera-frame') : null;
+    if(!feedEl || !frameEl) continue;
     let ok = false;
+    let errorMsg = '';
     try{
       const resp = await fetch(`/api/camera/${camId}/frame?ts=${Date.now()}`);
       if(resp.ok && resp.headers.get('Content-Type')?.includes('image/jpeg')){
@@ -120,15 +135,32 @@ async function refreshCameraFrame(){
         cameraUrls[camId] = url;
         feedEl.src = url;
         ok = true;
+      }else{
+        try{
+          const err = await resp.json();
+          errorMsg = err.message || 'Camera unavailable';
+        }catch(_){
+          errorMsg = `Camera ${camId} unavailable`;
+        }
       }
     }catch(_){
       ok = false;
+      errorMsg = `Camera ${camId} offline`;
     }
+
+    const statusInfo = statusMap.get(camId);
+    if(statusInfo && !ok && statusInfo.error){
+      errorMsg = statusInfo.error;
+    }
+
     if(!ok){
-      if(cameraUrls[camId]){ URL.revokeObjectURL(cameraUrls[camId]); delete cameraUrls[camId]; }
-      feedEl.removeAttribute('src');
+      frameEl.dataset.error = errorMsg || 'No signal';
+    }else{
+      frameEl.removeAttribute('data-error');
     }
-    statuses.push(`${camId}:${ok ? '✓' : '—'}`);
+
+    const mapped = statusInfo && statusInfo.mapped_to != null ? `→${statusInfo.mapped_to}` : '';
+    statuses.push(`${camId}:${ok ? '✓' : '—'}${mapped}`);
   }
   const cameraStatusEl = document.getElementById('cameraStatus');
   if(cameraStatusEl) cameraStatusEl.textContent = statuses.length ? `Cameras ${statuses.join(' · ')}` : 'Cameras: unavailable';
