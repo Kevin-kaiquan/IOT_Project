@@ -8,22 +8,19 @@
 <style>
   :root{--bg:#0b1020;--ink:#e7ecff;--muted:#9fb0d8;--card:#0f1730;--card-strong:#161f3c;--accent:#7aa2ff;--accent-2:#6be4c2;--danger:#ff7a8a}
   *{box-sizing:border-box} body{margin:0;background:radial-gradient(circle at 20% 20%,rgba(122,162,255,.06),transparent 38%),radial-gradient(circle at 80% 0,rgba(107,228,194,.06),transparent 35%),var(--bg);color:var(--ink);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
-  .wrap{max-width:1320px;margin:22px auto;padding:0 16px}
+  .wrap{max-width:1420px;margin:22px auto;padding:0 16px}
   h1{margin:0 0 6px;font-size:28px;font-weight:800}
   .sub{color:var(--muted);margin-bottom:14px}
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
   .card{background:linear-gradient(145deg,rgba(18,26,51,.96),rgba(12,19,38,.9));border-radius:16px;padding:16px;box-shadow:0 14px 32px rgba(0,0,0,.35),inset 0 1px 0 rgba(255,255,255,.02);height:100%;display:flex;flex-direction:column}
   .camera-card{position:relative;overflow:hidden}
-  .camera-frame{position:relative;border-radius:12px;overflow:hidden;height:340px;background:radial-gradient(circle at 30% 40%,rgba(122,162,255,.12),transparent 35%),
-    radial-gradient(circle at 70% 60%,rgba(122,162,255,.08),transparent 40%),#080c19;border:1px solid rgba(255,255,255,.06)}
-  .camera-feed{width:100%;height:100%;object-fit:cover;display:block;background:#050814}
-  .bbox{position:absolute;inset:20% 18%;border:2px solid var(--accent);border-radius:10px;box-shadow:0 0 12px rgba(122,162,255,.45);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;pointer-events:none}
-  .bbox-label{padding:4px 10px;border-radius:999px;background:var(--accent);color:#fff;font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:.5px}
-  .bbox-diff{font-size:13px;color:var(--ink);text-align:center;max-width:90%;line-height:1.4;background:rgba(8,12,25,.7);padding:6px 10px;border-radius:10px;border:1px solid rgba(122,162,255,.4)}
-  .detect-chip{position:absolute;top:12px;right:12px;padding:6px 12px;border-radius:999px;background:rgba(26,36,68,.9);border:1px solid rgba(255,255,255,.08);color:#cfe0ff;font-weight:700;font-size:12px;box-shadow:0 10px 22px rgba(0,0,0,.3)}
-  .detect-chip.danger{background:rgba(255,122,138,.9);border-color:rgba(255,255,255,.2);color:#fff;box-shadow:0 10px 26px rgba(255,122,138,.3)}
-  .leak-row{position:absolute;left:12px;right:12px;bottom:10px;display:flex;gap:10px;justify-content:center;pointer-events:none}
-  .leak-box{flex:1;min-height:34px;border-radius:12px;background:rgba(46,201,104,.8);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;text-transform:uppercase;box-shadow:0 6px 16px rgba(0,0,0,.35)}
+  .camera-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:14px;margin-top:10px}
+  .camera-frame{position:relative;border-radius:14px;overflow:hidden;height:360px;background:radial-gradient(circle at 30% 40%,rgba(122,162,255,.12),transparent 35%),
+    radial-gradient(circle at 70% 60%,rgba(107,228,194,.1),transparent 38%),#080c19;border:1px solid rgba(255,255,255,.06);box-shadow:0 14px 32px rgba(0,0,0,.35)}
+  .camera-feed{width:100%;height:100%;object-fit:cover;display:block;background:#050814;filter:contrast(1.08) saturate(1.05)}
+  .detect-strip{position:absolute;left:12px;right:12px;bottom:12px;padding:10px 12px;border-radius:12px;background:rgba(12,19,38,.92);border:1px solid rgba(255,255,255,.08);color:#cfe0ff;font-weight:700;display:flex;align-items:center;justify-content:space-between;gap:10px;box-shadow:0 10px 24px rgba(0,0,0,.32)}
+  .detect-strip.active{background:linear-gradient(135deg,rgba(122,162,255,1),rgba(107,228,194,1));color:#0b1020;border-color:rgba(255,255,255,.32);box-shadow:0 12px 26px rgba(107,228,194,.35),0 0 0 1px rgba(255,255,255,.1)}
+  .detect-strip .meta{font-size:12px;font-weight:600;opacity:.92}
   .row{display:flex;align-items:center;gap:8px}
   .spread{justify-content:space-between}
   .value{font-size:34px;font-weight:800;margin:4px 0}
@@ -44,13 +41,8 @@
   .badge{display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,.06);border-radius:999px;padding:4px 10px;font-size:12px;color:#e7ecff}
   .badge svg{width:14px;height:14px}
   canvas{width:100%!important;height:280px!important}
-  .main-grid{display:grid;grid-template-areas:'co2 camera temp' 'humidity camera light';grid-template-columns:repeat(3,1fr);gap:16px;align-items:stretch}
-  .card[data-area="co2"]{grid-area:co2}
-  .card[data-area="temp"]{grid-area:temp}
-  .card[data-area="humidity"]{grid-area:humidity}
-  .card[data-area="light"]{grid-area:light}
-  .camera-card[data-area="camera"]{grid-area:camera;display:flex;flex-direction:column}
-  .camera-card .camera-frame{flex:1}
+  .main-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;align-items:stretch}
+  .camera-card[data-area="camera"]{display:flex;flex-direction:column}
 </style>
 </head>
 <body>
@@ -126,23 +118,27 @@
       <div class="value" id="light">-- lux</div>
       <canvas id="lightChart"></canvas>
     </div>
+  </div>
 
-    <div class="card camera-card" data-area="camera">
-      <div class="row" style="margin-bottom:8px">
-        <div style="font-weight:700">Target Mushroom View</div>
-        <div class="chip" id="idealSummary">Ideal: --</div>
-        <div class="chip" id="cameraStatus">Camera: --</div>
-      </div>
-      <div class="camera-frame">
-        <img id="cameraFeed" class="camera-feed" aria-label="Target mushroom camera preview" alt="Live camera preview" />
-        <div class="detect-chip" id="contamChip">Contamination: none</div>
-        <div class="bbox" id="bbox">
-          <div class="bbox-label" id="bboxLabel">Target</div>
-          <div class="bbox-diff" id="bboxDiff">Waiting for data…</div>
+  <div class="card camera-card" data-area="camera" style="margin-top:16px">
+    <div class="row spread" style="margin-bottom:8px;gap:10px;align-items:flex-start">
+      <div style="font-weight:700">Target Mushroom Views</div>
+      <div class="chip" id="idealSummary">Ideal: --</div>
+      <div class="chip" id="cameraStatus">Camera: --</div>
+    </div>
+    <div class="camera-grid">
+      <div class="camera-frame" data-cam="0">
+        <img id="cameraFeed0" data-cam-id="0" class="camera-feed" aria-label="Camera 0 preview" alt="Camera 0 preview" />
+        <div class="detect-strip" id="detectStrip0">
+          <span data-role="label">No target detected</span>
+          <span class="meta" data-role="meta">Waiting for LED cycle…</span>
         </div>
-        <div class="leak-row" aria-label="Light leak indicators">
-          <div class="leak-box" id="leakLeft">Shielding OK</div>
-          <div class="leak-box" id="leakRight">Shielding OK</div>
+      </div>
+      <div class="camera-frame" data-cam="1">
+        <img id="cameraFeed1" data-cam-id="1" class="camera-feed" aria-label="Camera 1 preview" alt="Camera 1 preview" />
+        <div class="detect-strip" id="detectStrip1">
+          <span data-role="label">No target detected</span>
+          <span class="meta" data-role="meta">Waiting for LED cycle…</span>
         </div>
       </div>
     </div>
@@ -158,16 +154,13 @@ document.getElementById('interval').textContent = SAMPLE_INTERVAL;
 const tsLabels = [];
 const maxPoints = 60; // roughly 3 minutes
 const co2Data = []; const t1Data=[]; const t2Data=[]; const rhData=[]; const lightData=[];
-const bboxDiffEl = document.getElementById('bboxDiff');
-const bboxLabelEl = document.getElementById('bboxLabel');
-const contamChip = document.getElementById('contamChip');
 const idealSummaryEl = document.getElementById('idealSummary');
-const cameraFeedEl = document.getElementById('cameraFeed');
 const cameraStatusEl = document.getElementById('cameraStatus');
+const cameraFeeds = Array.from(document.querySelectorAll('.camera-feed'));
+const detectStrips = Array.from(document.querySelectorAll('.detect-strip'));
 const cameraOrder = [0,1];
-let lastCameraUrl = null;
-const leakBoxes = [document.getElementById('leakLeft'), document.getElementById('leakRight')];
-let lastLight = null;
+const cameraUrls = {};
+let latestLedState = '--';
 const controlButtons = {};
 const overrideBadge = document.getElementById('overrideBadge');
 
@@ -197,31 +190,6 @@ function updateIdealSummary(){
     `Light ≥${formatNumber(IDEAL.light_lux, 0)} lux`,
   ];
   idealSummaryEl.textContent = 'Ideal: ' + parts.join(' · ');
-}
-
-function updateLeakIndicator(light){
-  let text = 'Light N/A';
-  let bg = 'rgba(123,140,255,.5)';
-  if(typeof light === 'number'){
-    if(lastLight === null){
-      text = 'Calibrating…';
-      bg = 'rgba(123,140,255,.5)';
-    }else{
-      const delta = Math.abs(light - lastLight) / Math.max(1e-3, lastLight);
-      if(delta > 0.3){
-        text = 'Light leak suspected';
-        bg = 'rgba(217,83,79,.88)';
-      }else{
-        text = 'Shielding OK';
-        bg = 'rgba(46,201,104,.85)';
-      }
-    }
-    lastLight = light;
-  }
-  leakBoxes.forEach(el=>{
-    el.textContent = text;
-    el.style.background = bg;
-  });
 }
 
 function makeLine(ctx, label, color) {
@@ -260,70 +228,60 @@ function average(values){
   return valid.reduce((a,b)=>a+b,0)/valid.length;
 }
 
-function updateBoundingBox(now, detected, count){
+function updateDetectionStrips(now, detected, count, confidence){
   const tempAvg = average([now.temp1_c, now.temp2_c]);
   const humidity = typeof now.rh_air === 'number'? now.rh_air : null;
   const co2 = typeof now.co2_ppm === 'number'? now.co2_ppm : null;
   const light = typeof now.light === 'number'? now.light : null;
-
-  if(bboxLabelEl){
-    bboxLabelEl.textContent = detected && count>0 ? `Target (${count})` : 'Target';
-  }
-
-  if(!detected){
-    bboxDiffEl.textContent = 'No target mushroom detected';
-    return;
-  }
-
   const deltas = [
-    `Temp Δ ${formatDelta(tempAvg, IDEAL.temp_c, '°C', 1)}`,
-    `Humidity Δ ${formatDelta(humidity, IDEAL.humidity, '%RH', 1)}`,
-    `CO₂ Δ ${formatDelta(co2, IDEAL.co2_ppm, 'ppm', 0)}`,
-    `Light Δ ${formatDelta(light, IDEAL.light_lux, 'lux', 0)}`,
+    `ΔT ${formatDelta(tempAvg, IDEAL.temp_c, '°C', 1)}`,
+    `ΔRH ${formatDelta(humidity, IDEAL.humidity, '%RH', 1)}`,
+    `ΔCO₂ ${formatDelta(co2, IDEAL.co2_ppm, 'ppm', 0)}`,
+    `ΔLight ${formatDelta(light, IDEAL.light_lux, 'lux', 0)}`,
   ];
 
-  bboxDiffEl.textContent = deltas.join(' · ');
-}
+  const labelText = detected && count>0 ? `Detected ${count} mushrooms` : detected ? 'Target detected' : 'No target detected';
+  const metaText = detected
+    ? `p=${(confidence ?? 0).toFixed(2)} · ${deltas.join(' · ')}`
+    : 'Waiting for LED cycle…';
 
-function updateContaminationFlag(detected){
-  if(!contamChip) return;
-  if(detected){
-    contamChip.textContent = 'Contamination detected';
-    contamChip.classList.add('danger');
-  }else{
-    contamChip.textContent = 'Contamination: none';
-    contamChip.classList.remove('danger');
-  }
+  detectStrips.forEach(el=>{
+    const labelEl = el.querySelector('[data-role="label"]');
+    const metaEl = el.querySelector('[data-role="meta"]');
+    if(labelEl) labelEl.textContent = labelText;
+    if(metaEl) metaEl.textContent = metaText;
+    el.classList.toggle('active', detected);
+  });
 }
 
 // --- camera preview ---
 async function refreshCameraFrame(){
-  if(!cameraFeedEl) return;
+  if(!cameraFeeds.length) return;
+  const statuses = [];
   for(const camId of cameraOrder){
+    const feedEl = cameraFeeds.find(el=>Number(el.dataset.camId)===camId);
+    if(!feedEl) continue;
+    let ok = false;
     try{
       const resp = await fetch(`/api/camera/${camId}/frame?ts=${Date.now()}`);
-      if(!resp.ok || !resp.headers.get('Content-Type')?.includes('image/jpeg')){
-        continue;
+      if(resp.ok && resp.headers.get('Content-Type')?.includes('image/jpeg')){
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        if(cameraUrls[camId]) URL.revokeObjectURL(cameraUrls[camId]);
+        cameraUrls[camId] = url;
+        feedEl.src = url;
+        ok = true;
       }
-      const blob = await resp.blob();
-      const url = URL.createObjectURL(blob);
-      if(lastCameraUrl) URL.revokeObjectURL(lastCameraUrl);
-      lastCameraUrl = url;
-      cameraFeedEl.src = url;
-      cameraFeedEl.dataset.camId = camId;
-      if(cameraStatusEl) cameraStatusEl.textContent = `Camera: ${camId}`;
-      return;
     }catch(_){
-      // try next camera
+      ok = false;
     }
+    if(!ok){
+      if(cameraUrls[camId]){ URL.revokeObjectURL(cameraUrls[camId]); delete cameraUrls[camId]; }
+      feedEl.removeAttribute('src');
+    }
+    statuses.push(`${camId}:${ok ? '✓' : '—'}`);
   }
-  if(cameraStatusEl) cameraStatusEl.textContent = 'Camera: unavailable';
-  if(cameraFeedEl.dataset.camId) delete cameraFeedEl.dataset.camId;
-  if(lastCameraUrl){
-    URL.revokeObjectURL(lastCameraUrl);
-    lastCameraUrl = null;
-  }
-  cameraFeedEl.removeAttribute('src');
+  if(cameraStatusEl) cameraStatusEl.textContent = statuses.length ? `Cameras ${statuses.join(' · ')} · LED ${latestLedState}` : 'Camera: unavailable';
 }
 
 // --- manual control / overrides ---
@@ -386,8 +344,9 @@ async function tick(){
     const n = j.now || {};
     const cameraInfo = j.camera || {};
     const targetDetected = !!cameraInfo.target_detected;
-    const contaminationDetected = !!cameraInfo.contamination_detected;
     const mushroomCount = typeof cameraInfo.mushroom_count === 'number' ? cameraInfo.mushroom_count : 0;
+    const detectionConfidence = typeof cameraInfo.detection_confidence === 'number' ? cameraInfo.detection_confidence : 0;
+    latestLedState = (cameraInfo.led || '--').toString();
 
     const devices = j.devices || {};
     const states = {heater: devices.heater, fan: devices.fan, led: devices.led, atomizer: j.atomizer};
@@ -427,9 +386,7 @@ async function tick(){
     lightChart.data.datasets[0].data = lightData;
     lightChart.update('none');
 
-    updateLeakIndicator(n.light);
-    updateBoundingBox(n, targetDetected, mushroomCount);
-    updateContaminationFlag(contaminationDetected);
+    updateDetectionStrips(n, targetDetected, mushroomCount, detectionConfidence);
   }catch(e){
     // ignore
   }

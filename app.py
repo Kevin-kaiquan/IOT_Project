@@ -147,6 +147,7 @@ class CameraSupervisor:
         self.mushroom_count = 0
         self.target_detected = False
         self.contamination_detected = False
+        self.detection_confidence = 0.0
         self.last_detection_ts: Optional[float] = None
         self._stop_evt = threading.Event()
         self._th = threading.Thread(target=self._loop, name="camera-supervisor", daemon=True)
@@ -178,11 +179,19 @@ class CameraSupervisor:
             if self._stop_evt.is_set():
                 break
             try:
+                self.detection_confidence = 0.0
                 self.controller.set_led(True)
                 time.sleep(CAMERA_LED_WARMUP_SEC)
                 result = self.perform_detection() or {}
+                self.detection_confidence = float(
+                    result.get("confidence") or result.get("probability") or 0.0
+                )
                 self.mushroom_count = max(0, int(result.get("count") or 0))
-                self.target_detected = self.mushroom_count > 0 or bool(result.get("target_detected"))
+                self.target_detected = (
+                    self.mushroom_count > 0
+                    or bool(result.get("target_detected"))
+                    or self.detection_confidence >= 0.5
+                )
                 self.contamination_detected = bool(
                     result.get("contamination_detected")
                     or result.get("contamination")
@@ -198,6 +207,7 @@ class CameraSupervisor:
             "mushroom_count": self.mushroom_count,
             "target_detected": self.target_detected,
             "contamination_detected": self.contamination_detected,
+            "detection_confidence": self.detection_confidence,
             "last_detection_ts": self.last_detection_ts,
             "led": "on" if self.controller.led_on else "off",
         }
@@ -463,6 +473,7 @@ def control_task():
         light = now.get("light")
         rh    = now.get("rh_air")     # SCD41 的湿度，用来控制 GPIO17
         mushrooms = camera_supervisor.mushroom_count
+        detection_conf = camera_supervisor.detection_confidence
 
         # 1) Heater 按探针控制；Fan 仅在“无识别”模式下由阈值控制
         manage_fan = mushrooms <= 0
@@ -496,8 +507,17 @@ def control_task():
             _control_atomizer_with_rh(rh)
 
         # 3) 风扇：若识别到蘑菇，用 PID 将 CO2 拉到安全值；否则沿用阈值逻辑
+        detection_priority = (
+            device_controller.led_on
+            and detection_conf >= 0.8
+            and co2 is not None
+        )
+
         if fan_manual is not None:
             device_controller.set_fan(fan_manual)
+        elif detection_priority:
+            device_controller.set_fan(co2 is not None and co2 > CO2_SAFE_STOP)
+            fan_pid.reset()
         elif mushrooms > 0 and co2 is not None:
             output = fan_pid.step(co2, SAMPLE_INTERVAL_SEC)
             if co2 <= CO2_SAFE_STOP or mushrooms <= 0:
