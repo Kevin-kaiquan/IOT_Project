@@ -16,7 +16,7 @@
   .camera-card{position:relative;overflow:hidden}
   .camera-frame{position:relative;border-radius:12px;overflow:hidden;height:340px;background:radial-gradient(circle at 30% 40%,rgba(122,162,255,.12),transparent 35%),
     radial-gradient(circle at 70% 60%,rgba(122,162,255,.08),transparent 40%),#080c19;border:1px solid rgba(255,255,255,.06)}
-  .camera-feed{width:100%;height:100%;background:repeating-linear-gradient(135deg,rgba(255,255,255,.03),rgba(255,255,255,.03) 6px,transparent 6px,transparent 12px)}
+  .camera-feed{width:100%;height:100%;object-fit:cover;display:block;background:#050814}
   .bbox{position:absolute;inset:20% 18%;border:2px solid var(--accent);border-radius:10px;box-shadow:0 0 12px rgba(122,162,255,.45);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;pointer-events:none}
   .bbox-label{padding:4px 10px;border-radius:999px;background:var(--accent);color:#fff;font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:.5px}
   .bbox-diff{font-size:13px;color:var(--ink);text-align:center;max-width:90%;line-height:1.4;background:rgba(8,12,25,.7);padding:6px 10px;border-radius:10px;border:1px solid rgba(122,162,255,.4)}
@@ -129,9 +129,10 @@
       <div class="row" style="margin-bottom:8px">
         <div style="font-weight:700">Target Mushroom View</div>
         <div class="chip" id="idealSummary">Ideal: --</div>
+        <div class="chip" id="cameraStatus">Camera: --</div>
       </div>
       <div class="camera-frame">
-        <div class="camera-feed" aria-label="Target mushroom camera preview"></div>
+        <img id="cameraFeed" class="camera-feed" aria-label="Target mushroom camera preview" alt="Live camera preview" />
         <div class="bbox" id="bbox">
           <div class="bbox-label">Target</div>
           <div class="bbox-diff" id="bboxDiff">Waiting for data…</div>
@@ -156,6 +157,10 @@ const maxPoints = 60; // roughly 3 minutes
 const co2Data = []; const t1Data=[]; const t2Data=[]; const rhData=[]; const lightData=[];
 const bboxDiffEl = document.getElementById('bboxDiff');
 const idealSummaryEl = document.getElementById('idealSummary');
+const cameraFeedEl = document.getElementById('cameraFeed');
+const cameraStatusEl = document.getElementById('cameraStatus');
+const cameraOrder = [0,1];
+let lastCameraUrl = null;
 const leakBoxes = [document.getElementById('leakLeft'), document.getElementById('leakRight')];
 let lastLight = null;
 const controlButtons = {};
@@ -266,6 +271,36 @@ function updateBoundingBox(now){
   bboxDiffEl.textContent = deltas.join(' · ');
 }
 
+// --- camera preview ---
+async function refreshCameraFrame(){
+  if(!cameraFeedEl) return;
+  for(const camId of cameraOrder){
+    try{
+      const resp = await fetch(`/api/camera/${camId}/frame?ts=${Date.now()}`);
+      if(!resp.ok || !resp.headers.get('Content-Type')?.includes('image/jpeg')){
+        continue;
+      }
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      if(lastCameraUrl) URL.revokeObjectURL(lastCameraUrl);
+      lastCameraUrl = url;
+      cameraFeedEl.src = url;
+      cameraFeedEl.dataset.camId = camId;
+      if(cameraStatusEl) cameraStatusEl.textContent = `Camera: ${camId}`;
+      return;
+    }catch(_){
+      // try next camera
+    }
+  }
+  if(cameraStatusEl) cameraStatusEl.textContent = 'Camera: unavailable';
+  if(cameraFeedEl.dataset.camId) delete cameraFeedEl.dataset.camId;
+  if(lastCameraUrl){
+    URL.revokeObjectURL(lastCameraUrl);
+    lastCameraUrl = null;
+  }
+  cameraFeedEl.removeAttribute('src');
+}
+
 // --- manual control / overrides ---
 async function toggleDevice(device){
   const el = controlButtons[device];
@@ -372,6 +407,8 @@ async function tick(){
 
 tick();
 setInterval(tick, SAMPLE_INTERVAL*1000);
+refreshCameraFrame();
+setInterval(refreshCameraFrame, 3000);
 </script>
 </body>
 </html>
