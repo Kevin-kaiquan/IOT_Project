@@ -1,3 +1,4 @@
 Flask>=3.0
 smbus2>=0.4
 RPi.GPIO>=0.7
+opencv-python>=4.10

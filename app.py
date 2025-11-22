@@ -145,6 +145,8 @@ class CameraSupervisor:
     def __init__(self, controller: "DeviceController") -> None:
         self.controller = controller
         self.mushroom_count = 0
+        self.target_detected = False
+        self.contamination_detected = False
         self.last_detection_ts: Optional[float] = None
         self._stop_evt = threading.Event()
         self._th = threading.Thread(target=self._loop, name="camera-supervisor", daemon=True)
@@ -160,9 +162,14 @@ class CameraSupervisor:
     def perform_detection(self) -> dict:
         """
         真正的图像识别逻辑可以替换这里。
-        返回 dict，至少包含 count（识别出的目标蘑菇数量）。
+        返回 dict，至少包含 count（识别出的目标蘑菇数量）。如果需要污染检测，
+        可在结果里返回 ``contamination`` 或 ``contamination_detected`` 布尔值。
         """
-        return {"count": self.mushroom_count, "confidence": 1.0}
+        return {
+            "count": self.mushroom_count,
+            "confidence": 1.0,
+            "contamination": self.contamination_detected,
+        }
 
     def _loop(self) -> None:
         while not self._stop_evt.is_set():
@@ -175,6 +182,11 @@ class CameraSupervisor:
                 time.sleep(CAMERA_LED_WARMUP_SEC)
                 result = self.perform_detection() or {}
                 self.mushroom_count = max(0, int(result.get("count") or 0))
+                self.target_detected = self.mushroom_count > 0 or bool(result.get("target_detected"))
+                self.contamination_detected = bool(
+                    result.get("contamination_detected")
+                    or result.get("contamination")
+                )
                 self.last_detection_ts = time.time()
             except Exception as e:
                 log.warning(f"camera detection loop error: {e}")
@@ -184,12 +196,15 @@ class CameraSupervisor:
     def status(self) -> dict:
         return {
             "mushroom_count": self.mushroom_count,
+            "target_detected": self.target_detected,
+            "contamination_detected": self.contamination_detected,
             "last_detection_ts": self.last_detection_ts,
             "led": "on" if self.controller.led_on else "off",
         }
 
 # ---- 硬件 / 服务实例 ----
 from actuators.atomizer import Atomizer
+from services.camera import CameraManager
 from services.sampler import Sampler
 from services.oled import OledDisplay
 from sensors.EnvironmentController import DeviceController
@@ -213,6 +228,10 @@ device_controller = DeviceController(HEATER_PIN, FAN_PIN, LED_PIN)
 # 相机 LED/检测调度器
 camera_supervisor = CameraSupervisor(device_controller)
 atexit.register(camera_supervisor.stop)
+
+# 相机采集（最多两个 USB 摄像头）
+camera_manager = CameraManager(device_indices=[0, 1])
+atexit.register(camera_manager.cleanup)
 
 # OLED 显示
 oled = OledDisplay(bus=OLED_BUS, addr=OLED_ADDR, rotate=OLED_ROTATE, fps=OLED_FPS)
@@ -291,6 +310,29 @@ def api_data():
     snap["co2_source"] = now.get("co2_from")
     snap["overrides"] = _serialize_overrides()
     return jsonify(snap)
+
+
+@app.route("/api/camera/<int:cam_id>/frame")
+def api_camera_frame(cam_id: int):
+    """返回指定摄像头的 JPEG 帧（camera id 由操作系统分配，通常是 0 或 1）。"""
+    try:
+        frame = camera_manager.get_frame(cam_id)
+    except KeyError:
+        return jsonify(ok=False, message="invalid camera id"), 404
+    except Exception as e:
+        return jsonify(ok=False, message=str(e)), 503
+
+    resp = app.response_class(frame, mimetype="image/jpeg")
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
+
+
+@app.route("/api/camera/status")
+def api_camera_status():
+    """简单返回两个摄像头的就绪情况，便于前端判断是否有画面。"""
+    return jsonify(ok=True, cameras=camera_manager.status())
 
 
 @app.route("/api/atomizer", methods=["GET", "POST"])
