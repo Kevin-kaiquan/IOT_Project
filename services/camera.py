@@ -23,8 +23,8 @@ class CameraManager:
         self,
         device_indices: Iterable[int],
         *,
-        width: int = 640,
-        height: int = 480,
+        width: int = 960,
+        height: int = 720,
     ) -> None:
         self.device_indices: List[int] = sorted(set(int(i) for i in device_indices))
         self.width = width

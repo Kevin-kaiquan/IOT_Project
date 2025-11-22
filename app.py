@@ -260,6 +260,14 @@ def index():
     )
 
 
+@app.route("/cameras")
+def cameras_view():
+    return render_template(
+        "cameras.html",
+        ideal_environment=IDEAL_ENVIRONMENT,
+    )
+
+
 def _cleanup_overrides() -> None:
     """清理过期的手动指令。"""
     now = time.time()
