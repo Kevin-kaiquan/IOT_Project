@@ -8,13 +8,13 @@
 <style>
   :root{--bg:#0b1020;--ink:#e7ecff;--muted:#9fb0d8;--card:#0f1730;--card-strong:#161f3c;--accent:#7aa2ff;--accent-2:#6be4c2;--danger:#ff7a8a}
   *{box-sizing:border-box} body{margin:0;background:radial-gradient(circle at 20% 20%,rgba(122,162,255,.06),transparent 38%),radial-gradient(circle at 80% 0,rgba(107,228,194,.06),transparent 35%),var(--bg);color:var(--ink);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
-  .wrap{max-width:1180px;margin:22px auto;padding:0 16px}
-  h1{margin:0 0 6px;font-size:28px;font-weight:800}
-  .sub{color:var(--muted);margin-bottom:14px}
-  .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-  .card{background:linear-gradient(145deg,rgba(18,26,51,.96),rgba(12,19,38,.9));border-radius:16px;padding:16px;box-shadow:0 14px 32px rgba(0,0,0,.35),inset 0 1px 0 rgba(255,255,255,.02)}
+  .wrap{max-width:1500px;width:calc(100vw - 32px);margin:18px auto;padding:0 8px}
+  h1{margin:0 0 4px;font-size:28px;font-weight:800}
+  .sub{color:var(--muted);margin-bottom:12px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .card{background:linear-gradient(145deg,rgba(18,26,51,.96),rgba(12,19,38,.9));border-radius:16px;padding:16px;box-shadow:0 14px 32px rgba(0,0,0,.35),inset 0 1px 0 rgba(255,255,255,.02);height:100%;display:flex;flex-direction:column}
   .camera-card{position:relative;overflow:hidden}
-  .camera-frame{position:relative;border-radius:12px;overflow:hidden;height:260px;background:radial-gradient(circle at 30% 40%,rgba(122,162,255,.12),transparent 35%),
+  .camera-frame{position:relative;border-radius:12px;overflow:hidden;min-height:420px;background:radial-gradient(circle at 30% 40%,rgba(122,162,255,.12),transparent 35%),
     radial-gradient(circle at 70% 60%,rgba(122,162,255,.08),transparent 40%),#080c19;border:1px solid rgba(255,255,255,.06)}
   .camera-feed{width:100%;height:100%;background:repeating-linear-gradient(135deg,rgba(255,255,255,.03),rgba(255,255,255,.03) 6px,transparent 6px,transparent 12px)}
   .bbox{position:absolute;inset:20% 18%;border:2px solid var(--accent);border-radius:10px;box-shadow:0 0 12px rgba(122,162,255,.45);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;pointer-events:none}
@@ -30,7 +30,7 @@
   .chip{font-size:12px;padding:4px 8px;border-radius:12px;background:#1b2240;color:#b6c5f3}
   .pill{display:inline-flex;align-items:center;gap:8px;padding:6px 10px;border-radius:999px;background:rgba(26,36,68,.9);border:1px solid rgba(255,255,255,.06);color:#cfe0ff;font-size:12px}
   .pill strong{color:#fff}
-  .device-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-top:12px}
+  .device-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-top:12px}
   .device-btn{position:relative;background:var(--card-strong);border:1px solid rgba(255,255,255,.06);color:#cfe0ff;padding:14px;border-radius:14px;box-shadow:0 10px 22px rgba(0,0,0,.28);text-align:left;transition:transform .15s ease,box-shadow .15s ease,background .2s ease,border .2s ease}
   .device-btn .device-name{font-size:15px;font-weight:800}
   .device-btn .device-state{font-size:13px;color:#e7ecff;margin-top:6px}
@@ -41,7 +41,14 @@
   .device-btn:hover{transform:translateY(-2px);box-shadow:0 14px 30px rgba(0,0,0,.35)}
   .badge{display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,.06);border-radius:999px;padding:4px 10px;font-size:12px;color:#e7ecff}
   .badge svg{width:14px;height:14px}
-  canvas{width:100%!important;height:280px!important}
+  canvas{width:100%!important;height:250px!important}
+  .main-grid{display:grid;grid-template-areas:'co2 camera temp' 'humidity camera light';grid-template-columns:1.05fr 1.35fr 1.05fr;grid-auto-rows:minmax(260px,1fr);gap:14px;align-items:stretch}
+  .card[data-area="co2"]{grid-area:co2}
+  .card[data-area="temp"]{grid-area:temp}
+  .card[data-area="humidity"]{grid-area:humidity}
+  .card[data-area="light"]{grid-area:light}
+  .camera-card[data-area="camera"]{grid-area:camera;display:flex;flex-direction:column}
+  .camera-card .camera-frame{flex:1}
 </style>
 </head>
 <body>
@@ -52,58 +59,40 @@
   <div class="card">
     <div class="row spread" style="gap:12px;align-items:flex-start">
       <div>
-        <div style="font-weight:800;font-size:16px">设备手动控制</div>
-        <div class="pill" style="margin-top:6px">自动控制基于传感器，点击可手动保持 5 分钟</div>
+        <div style="font-weight:800;font-size:16px">Device Manual Control</div>
+        <div class="pill" style="margin-top:6px">Automatic control uses sensor data; click to hold manual state for 5 minutes</div>
       </div>
       <div class="badge" id="overrideBadge">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2 9 14l-4-4-4 4"/><path d="M21 2v6h-6"/></svg>
-        <span>自动协调中</span>
+        <span>Auto orchestration</span>
       </div>
     </div>
     <div class="device-grid">
       <button class="device-btn off" id="btn-heater" data-device="heater" data-state="off">
-        <div class="device-name">加热器</div>
-        <div class="device-state" data-role="state">关闭</div>
-        <div class="device-meta" data-role="meta">自动模式</div>
+        <div class="device-name">Heater</div>
+        <div class="device-state" data-role="state">Off</div>
+        <div class="device-meta" data-role="meta">Automatic</div>
       </button>
       <button class="device-btn off" id="btn-fan" data-device="fan" data-state="off">
-        <div class="device-name">风扇</div>
-        <div class="device-state" data-role="state">关闭</div>
-        <div class="device-meta" data-role="meta">自动模式</div>
+        <div class="device-name">Fan</div>
+        <div class="device-state" data-role="state">Off</div>
+        <div class="device-meta" data-role="meta">Automatic</div>
       </button>
       <button class="device-btn off" id="btn-led" data-device="led" data-state="off">
         <div class="device-name">LED</div>
-        <div class="device-state" data-role="state">关闭</div>
-        <div class="device-meta" data-role="meta">自动模式</div>
+        <div class="device-state" data-role="state">Off</div>
+        <div class="device-meta" data-role="meta">Automatic</div>
       </button>
       <button class="device-btn off" id="btn-atomizer" data-device="atomizer" data-state="off">
-        <div class="device-name">雾化器</div>
-        <div class="device-state" data-role="state">关闭</div>
-        <div class="device-meta" data-role="meta">自动模式</div>
+        <div class="device-name">Atomizer</div>
+        <div class="device-state" data-role="state">Off</div>
+        <div class="device-meta" data-role="meta">Automatic</div>
       </button>
     </div>
   </div>
 
-  <div class="card camera-card">
-    <div class="row" style="margin-bottom:8px">
-      <div style="font-weight:700">Target Mushroom View</div>
-      <div class="chip" id="idealSummary">Ideal: --</div>
-    </div>
-    <div class="camera-frame">
-      <div class="camera-feed" aria-label="Target mushroom camera preview"></div>
-      <div class="bbox" id="bbox">
-        <div class="bbox-label">Target</div>
-        <div class="bbox-diff" id="bboxDiff">Waiting for data…</div>
-      </div>
-      <div class="leak-row" aria-label="Light leak indicators">
-        <div class="leak-box" id="leakLeft">Shielding OK</div>
-        <div class="leak-box" id="leakRight">Shielding OK</div>
-      </div>
-    </div>
-  </div>
-
-  <div class="grid">
-    <div class="card">
+  <div class="main-grid">
+    <div class="card" data-area="co2">
       <div class="row">
         <div style="font-weight:700">Current CO₂</div>
         <div id="co2src" class="chip">source: --</div>
@@ -114,7 +103,7 @@
       <div style="margin-top:12px"><canvas id="co2Chart"></canvas></div>
     </div>
 
-    <div class="card">
+    <div class="card" data-area="temp">
       <div class="row"><div style="font-weight:700">Probe Temperatures (1-Wire)</div></div>
       <div class="row" style="gap:12px;margin:6px 0 6px">
         <div class="chip" id="t1c">T1: -- °C</div>
@@ -124,16 +113,34 @@
       <canvas id="tempChart"></canvas>
     </div>
 
-    <div class="card">
+    <div class="card" data-area="humidity">
       <div class="row"><div style="font-weight:700">Humidity (SCD41)</div></div>
       <div class="value" id="rh">-- %RH</div>
       <canvas id="rhChart"></canvas>
     </div>
 
-    <div class="card">
+    <div class="card" data-area="light">
       <div class="row"><div style="font-weight:700">Light (VELM7700)</div></div>
       <div class="value" id="light">-- lux</div>
       <canvas id="lightChart"></canvas>
+    </div>
+
+    <div class="card camera-card" data-area="camera">
+      <div class="row" style="margin-bottom:8px">
+        <div style="font-weight:700">Target Mushroom View</div>
+        <div class="chip" id="idealSummary">Ideal: --</div>
+      </div>
+      <div class="camera-frame">
+        <div class="camera-feed" aria-label="Target mushroom camera preview"></div>
+        <div class="bbox" id="bbox">
+          <div class="bbox-label">Target</div>
+          <div class="bbox-diff" id="bboxDiff">Waiting for data…</div>
+        </div>
+        <div class="leak-row" aria-label="Light leak indicators">
+          <div class="leak-box" id="leakLeft">Shielding OK</div>
+          <div class="leak-box" id="leakRight">Shielding OK</div>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -145,7 +152,7 @@ document.getElementById('interval').textContent = SAMPLE_INTERVAL;
 
 // --- charts ---
 const tsLabels = [];
-const maxPoints = 60; // 约3分钟
+const maxPoints = 60; // roughly 3 minutes
 const co2Data = []; const t1Data=[]; const t2Data=[]; const rhData=[]; const lightData=[];
 const bboxDiffEl = document.getElementById('bboxDiff');
 const idealSummaryEl = document.getElementById('idealSummary');
@@ -259,7 +266,7 @@ function updateBoundingBox(now){
   bboxDiffEl.textContent = deltas.join(' · ');
 }
 
-// --- 手动控制 / 覆盖 ---
+// --- manual control / overrides ---
 async function toggleDevice(device){
   const el = controlButtons[device];
   if(!el) return;
@@ -294,13 +301,13 @@ function updateDeviceButtons(states={}, overrides={}){
     el.classList.toggle('manual', manual);
     const stateEl = el.querySelector('[data-role="state"]');
     const metaEl = el.querySelector('[data-role="meta"]');
-    if(stateEl) stateEl.textContent = state === 'on' ? '已开启' : '关闭';
-    if(metaEl) metaEl.textContent = manual ? '手动保持中' : '自动模式';
+    if(stateEl) stateEl.textContent = state === 'on' ? 'On' : 'Off';
+    if(metaEl) metaEl.textContent = manual ? 'Manual hold (5m)' : 'Automatic';
   });
 
   const activeOverrides = Object.keys(overrides || {}).length;
   if(overrideBadge){
-    overrideBadge.querySelector('span').textContent = activeOverrides ? `手动覆盖 ${activeOverrides} 个设备` : '自动协调中';
+    overrideBadge.querySelector('span').textContent = activeOverrides ? `Manual override (${activeOverrides} device${activeOverrides===1?'':'s'})` : 'Auto orchestration';
     overrideBadge.style.background = activeOverrides ? 'rgba(122,162,255,.16)' : 'rgba(255,255,255,.06)';
   }
 }
@@ -322,7 +329,7 @@ async function tick(){
     const states = {heater: devices.heater, fan: devices.fan, led: devices.led, atomizer: j.atomizer};
     const overrides = j.overrides || {};
 
-    // 数字
+    // numbers
     document.getElementById('co2').textContent = (n.co2_ppm!=null? Math.round(n.co2_ppm):'--') + ' ppm';
     document.getElementById('co2src').textContent = 'source: ' + (j.co2_source || 'scd41');
     document.getElementById('t1c').textContent = 'T1: ' + (n.temp1_c!=null? n.temp1_c.toFixed(2):'--') + ' °C';
@@ -335,7 +342,7 @@ async function tick(){
     if(atomMeta) atomMeta.textContent = `Atomizer: ${j.atomizer || '--'}`;
     updateDeviceButtons(states, overrides);
 
-    // 折线
+    // charts
     pushLabel();
     pushPoint(co2Data, n.co2_ppm ?? null);
     pushPoint(t1Data, n.temp1_c ?? null);
