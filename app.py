@@ -190,6 +190,7 @@ class CameraSupervisor:
 
 # ---- 硬件 / 服务实例 ----
 from actuators.atomizer import Atomizer
+from services.camera import CameraManager
 from services.sampler import Sampler
 from services.oled import OledDisplay
 from sensors.EnvironmentController import DeviceController
@@ -213,6 +214,10 @@ device_controller = DeviceController(HEATER_PIN, FAN_PIN, LED_PIN)
 # 相机 LED/检测调度器
 camera_supervisor = CameraSupervisor(device_controller)
 atexit.register(camera_supervisor.stop)
+
+# 相机采集（最多两个 USB 摄像头）
+camera_manager = CameraManager(device_indices=[0, 1])
+atexit.register(camera_manager.cleanup)
 
 # OLED 显示
 oled = OledDisplay(bus=OLED_BUS, addr=OLED_ADDR, rotate=OLED_ROTATE, fps=OLED_FPS)
@@ -291,6 +296,29 @@ def api_data():
     snap["co2_source"] = now.get("co2_from")
     snap["overrides"] = _serialize_overrides()
     return jsonify(snap)
+
+
+@app.route("/api/camera/<int:cam_id>/frame")
+def api_camera_frame(cam_id: int):
+    """返回指定摄像头的 JPEG 帧（camera id 由操作系统分配，通常是 0 或 1）。"""
+    try:
+        frame = camera_manager.get_frame(cam_id)
+    except KeyError:
+        return jsonify(ok=False, message="invalid camera id"), 404
+    except Exception as e:
+        return jsonify(ok=False, message=str(e)), 503
+
+    resp = app.response_class(frame, mimetype="image/jpeg")
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
+
+
+@app.route("/api/camera/status")
+def api_camera_status():
+    """简单返回两个摄像头的就绪情况，便于前端判断是否有画面。"""
+    return jsonify(ok=True, cameras=camera_manager.status())
 
 
 @app.route("/api/atomizer", methods=["GET", "POST"])
