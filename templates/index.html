@@ -14,14 +14,12 @@
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
   .card{background:linear-gradient(145deg,rgba(18,26,51,.96),rgba(12,19,38,.9));border-radius:16px;padding:16px;box-shadow:0 14px 32px rgba(0,0,0,.35),inset 0 1px 0 rgba(255,255,255,.02);height:100%;display:flex;flex-direction:column}
   .camera-card{position:relative;overflow:hidden}
-  .camera-frame{position:relative;border-radius:12px;overflow:hidden;height:340px;background:radial-gradient(circle at 30% 40%,rgba(122,162,255,.12),transparent 35%),
+  .camera-frame{position:relative;border-radius:12px;overflow:hidden;aspect-ratio:1/1;min-height:240px;background:radial-gradient(circle at 30% 40%,rgba(122,162,255,.12),transparent 35%),
     radial-gradient(circle at 70% 60%,rgba(122,162,255,.08),transparent 40%),#080c19;border:1px solid rgba(255,255,255,.06)}
   .camera-feed{width:100%;height:100%;object-fit:cover;display:block;background:#050814}
   .bbox{position:absolute;inset:20% 18%;border:2px solid var(--accent);border-radius:10px;box-shadow:0 0 12px rgba(122,162,255,.45);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;pointer-events:none}
   .bbox-label{padding:4px 10px;border-radius:999px;background:var(--accent);color:#fff;font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:.5px}
   .bbox-diff{font-size:13px;color:var(--ink);text-align:center;max-width:90%;line-height:1.4;background:rgba(8,12,25,.7);padding:6px 10px;border-radius:10px;border:1px solid rgba(122,162,255,.4)}
-  .leak-row{position:absolute;left:12px;right:12px;bottom:10px;display:flex;gap:10px;justify-content:center;pointer-events:none}
-  .leak-box{flex:1;min-height:34px;border-radius:12px;background:rgba(46,201,104,.8);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;text-transform:uppercase;box-shadow:0 6px 16px rgba(0,0,0,.35)}
   .row{display:flex;align-items:center;gap:8px}
   .spread{justify-content:space-between}
   .value{font-size:34px;font-weight:800;margin:4px 0}
@@ -42,13 +40,25 @@
   .badge{display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,.06);border-radius:999px;padding:4px 10px;font-size:12px;color:#e7ecff}
   .badge svg{width:14px;height:14px}
   canvas{width:100%!important;height:280px!important}
-  .main-grid{display:grid;grid-template-areas:'co2 camera temp' 'humidity camera light';grid-template-columns:repeat(3,1fr);gap:16px;align-items:stretch}
-  .card[data-area="co2"]{grid-area:co2}
-  .card[data-area="temp"]{grid-area:temp}
-  .card[data-area="humidity"]{grid-area:humidity}
-  .card[data-area="light"]{grid-area:light}
-  .camera-card[data-area="camera"]{grid-area:camera;display:flex;flex-direction:column}
-  .camera-card .camera-frame{flex:1}
+  .top-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:stretch;margin-top:16px}
+  .bottom-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;align-items:stretch;justify-content:center;margin-top:16px}
+  .camera-card{display:flex;flex-direction:column}
+  .camera-card .camera-frame{flex:0 0 auto}
+  .detection-panel{margin-top:12px;border-radius:12px;padding:12px;background:rgba(19,28,55,.85);border:1px solid rgba(255,255,255,.05);display:flex;flex-direction:column;gap:10px}
+  .progress{position:relative;width:100%;height:12px;border-radius:999px;background:rgba(255,255,255,.06);overflow:hidden}
+  .progress.small{height:10px}
+  .progress .progress-bar{position:absolute;left:0;top:0;bottom:0;width:0;background:linear-gradient(90deg,var(--accent),var(--accent-2));transition:width .4s ease}
+  .progress .progress-bar.danger{background:linear-gradient(90deg,var(--danger),#ffafaf)}
+  .value.small{font-size:24px}
+  .growth-info{font-size:13px;color:var(--muted);line-height:1.5}
+  .growth-info.active{color:#cfe0ff}
+  .contaminant-list{display:flex;flex-direction:column;gap:10px}
+  .contam-row{display:flex;flex-direction:column;gap:4px;padding:8px;border-radius:10px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.04)}
+  .contam-row .row{justify-content:space-between}
+  .pill.compact{padding:4px 8px;font-size:11px}
+  .target-quick{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px}
+  .target-chip{padding:8px 10px;border-radius:10px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.05);font-size:12px;color:#b6c5f3;line-height:1.4}
+  .target-chip strong{display:block;color:#e7ecff;margin-bottom:2px}
 </style>
 </head>
 <body>
@@ -91,7 +101,7 @@
     </div>
   </div>
 
-  <div class="main-grid">
+  <div class="top-grid">
     <div class="card" data-area="co2">
       <div class="row">
         <div style="font-weight:700">Current CO₂</div>
@@ -101,28 +111,6 @@
       <div class="value" id="co2">-- ppm</div>
       <div class="pill" style="margin-top:8px" id="atomMeta">Atomizer: --</div>
       <div style="margin-top:12px"><canvas id="co2Chart"></canvas></div>
-    </div>
-
-    <div class="card" data-area="temp">
-      <div class="row"><div style="font-weight:700">Probe Temperatures (1-Wire)</div></div>
-      <div class="row" style="gap:12px;margin:6px 0 6px">
-        <div class="chip" id="t1c">T1: -- °C</div>
-        <div class="chip" id="t2c">T2: -- °C</div>
-        <div class="chip" id="envTemp">Ambient: -- °C</div>
-      </div>
-      <canvas id="tempChart"></canvas>
-    </div>
-
-    <div class="card" data-area="humidity">
-      <div class="row"><div style="font-weight:700">Humidity (SCD41)</div></div>
-      <div class="value" id="rh">-- %RH</div>
-      <canvas id="rhChart"></canvas>
-    </div>
-
-    <div class="card" data-area="light">
-      <div class="row"><div style="font-weight:700">Light (VELM7700)</div></div>
-      <div class="value" id="light">-- lux</div>
-      <canvas id="lightChart"></canvas>
     </div>
 
     <div class="card camera-card" data-area="camera">
@@ -137,11 +125,48 @@
           <div class="bbox-label">Target</div>
           <div class="bbox-diff" id="bboxDiff">Waiting for data…</div>
         </div>
-        <div class="leak-row" aria-label="Light leak indicators">
-          <div class="leak-box" id="leakLeft">Shielding OK</div>
-          <div class="leak-box" id="leakRight">Shielding OK</div>
-        </div>
       </div>
+      <div class="detection-panel">
+        <div class="row spread">
+          <div>
+            <div style="font-size:13px;color:var(--muted)">Donggu probability</div>
+            <div class="value small" id="mushroomProb">--</div>
+          </div>
+          <div class="chip" id="lastDetect">Detection time: --</div>
+        </div>
+        <div class="progress" aria-label="Donggu probability">
+          <div class="progress-bar" id="mushroomProbBar"></div>
+        </div>
+        <div class="growth-info" id="growthInfo">Waiting for detection data…</div>
+        <div class="contaminant-list" id="contaminantList"></div>
+        <div class="target-quick" id="targetQuick"></div>
+      </div>
+    </div>
+
+    <div class="card" data-area="temp">
+      <div class="row spread">
+        <div style="font-weight:700">Probe Temperatures (±Wire)</div>
+        <div class="chip" id="envTemp">Ambient: -- °C</div>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <div class="pill" id="t1c">T1: -- °C</div>
+        <div class="pill" id="t2c">T2: -- °C</div>
+      </div>
+      <div style="margin-top:12px"><canvas id="tempChart"></canvas></div>
+    </div>
+  </div>
+
+  <div class="bottom-grid">
+    <div class="card" data-area="humidity">
+      <div class="row"><div style="font-weight:700">Humidity (SCD41)</div></div>
+      <div class="value" id="rh">-- %RH</div>
+      <canvas id="rhChart"></canvas>
+    </div>
+
+    <div class="card" data-area="light">
+      <div class="row"><div style="font-weight:700">Light (VELM7700)</div></div>
+      <div class="value" id="light">-- lux</div>
+      <canvas id="lightChart"></canvas>
     </div>
   </div>
 </div>
@@ -159,10 +184,14 @@ const bboxDiffEl = document.getElementById('bboxDiff');
 const idealSummaryEl = document.getElementById('idealSummary');
 const cameraFeedEl = document.getElementById('cameraFeed');
 const cameraStatusEl = document.getElementById('cameraStatus');
+const mushroomProbEl = document.getElementById('mushroomProb');
+const mushroomProbBarEl = document.getElementById('mushroomProbBar');
+const growthInfoEl = document.getElementById('growthInfo');
+const contaminantListEl = document.getElementById('contaminantList');
+const lastDetectEl = document.getElementById('lastDetect');
+const targetQuickEl = document.getElementById('targetQuick');
 const cameraOrder = [0,1];
 let lastCameraUrl = null;
-const leakBoxes = [document.getElementById('leakLeft'), document.getElementById('leakRight')];
-let lastLight = null;
 const controlButtons = {};
 const overrideBadge = document.getElementById('overrideBadge');
 
@@ -186,37 +215,12 @@ function formatDelta(value, ideal, unit, digits=1){
 
 function updateIdealSummary(){
   const parts = [
-    `Temp ${formatNumber(IDEAL.temp_c, 1)}°C`,
-    `Humidity ${formatNumber(IDEAL.humidity, 1)}%RH`,
-    `CO₂ ${formatNumber(IDEAL.co2_ppm, 0)}ppm`,
-    `Light ≥${formatNumber(IDEAL.light_lux, 0)} lux`,
+    `Temp ${IDEAL.temp_range || `${formatNumber(IDEAL.temp_c, 1)}°C`}`,
+    `Humidity ${IDEAL.humidity_range || `${formatNumber(IDEAL.humidity, 1)}%RH`}`,
+    `CO₂ ${IDEAL.co2_range || `${formatNumber(IDEAL.co2_ppm, 0)}ppm`}`,
+    `Light ${IDEAL.light_range || `≥${formatNumber(IDEAL.light_lux, 0)} lux`}`,
   ];
   idealSummaryEl.textContent = 'Ideal: ' + parts.join(' · ');
-}
-
-function updateLeakIndicator(light){
-  let text = 'Light N/A';
-  let bg = 'rgba(123,140,255,.5)';
-  if(typeof light === 'number'){
-    if(lastLight === null){
-      text = 'Calibrating…';
-      bg = 'rgba(123,140,255,.5)';
-    }else{
-      const delta = Math.abs(light - lastLight) / Math.max(1e-3, lastLight);
-      if(delta > 0.3){
-        text = 'Light leak suspected';
-        bg = 'rgba(217,83,79,.88)';
-      }else{
-        text = 'Shielding OK';
-        bg = 'rgba(46,201,104,.85)';
-      }
-    }
-    lastLight = light;
-  }
-  leakBoxes.forEach(el=>{
-    el.textContent = text;
-    el.style.background = bg;
-  });
 }
 
 function makeLine(ctx, label, color) {
@@ -248,6 +252,7 @@ const rhChart = makeLine(document.getElementById('rhChart'), 'RH (%)');
 const lightChart = makeLine(document.getElementById('lightChart'), 'Light (lux)');
 
 updateIdealSummary();
+renderTargetQuick();
 
 function average(values){
   const valid = values.filter(v=>typeof v==='number' && !Number.isNaN(v));
@@ -269,6 +274,67 @@ function updateBoundingBox(now){
   ];
 
   bboxDiffEl.textContent = deltas.join(' · ');
+}
+
+function renderTargetQuick(){
+  if(!targetQuickEl) return;
+  const metrics = [
+    {label:'Thermal gradient index', desc:'T_env - T_deep; large gaps suppress growth and waste nutrients'},
+    {label:'CO₂ change rate', desc:'ΔCO₂ / Δt; sharp swings hint at fan or gas adjustment phases'},
+    {label:'Humidity stability', desc:'std(24h humidity); lower values mean steadier canopy moisture'},
+  ];
+  targetQuickEl.innerHTML = metrics.map(m=>`<div class="target-chip"><strong>${m.label}</strong><span>${m.desc}</span></div>`).join('');
+}
+
+function formatPercent(v){
+  if(typeof v !== 'number' || Number.isNaN(v)) return '--';
+  return `${(Math.max(0, Math.min(1, v)) * 100).toFixed(1)}%`;
+}
+
+function setProgressBar(el, value, danger=false){
+  if(!el) return;
+  const pct = Math.max(0, Math.min(1, value || 0));
+  el.style.width = `${(pct*100).toFixed(1)}%`;
+  el.classList.toggle('danger', danger);
+}
+
+function renderDetection(cameraData={}){
+  const detection = cameraData.detection || {};
+  const mushProb = typeof detection.mushroom_confidence === 'number'
+    ? detection.mushroom_confidence
+    : (typeof detection.confidence === 'number' ? detection.confidence : 0);
+
+  if(mushroomProbEl) mushroomProbEl.textContent = formatPercent(mushProb);
+  if(mushroomProbBarEl) setProgressBar(mushroomProbBarEl, mushProb);
+
+  if(lastDetectEl){
+    const ts = cameraData.last_detection_ts ? new Date(cameraData.last_detection_ts*1000) : null;
+    lastDetectEl.textContent = ts ? `Detection time: ${ts.toLocaleTimeString()}` : 'Detection time: --';
+  }
+
+  if(contaminantListEl){
+    contaminantListEl.innerHTML = '';
+    (detection.contaminants || []).forEach(item=>{
+      const prob = typeof item.prob === 'number' ? item.prob : 0;
+      const row = document.createElement('div');
+      row.className = 'contam-row';
+      row.innerHTML = `
+        <div class="row"><div>${item.name || 'Contaminant'}</div><div class="pill compact">${formatPercent(prob)}</div></div>
+        <div class="progress small"><div class="progress-bar danger" style="width:${(Math.max(0, Math.min(1, prob))*100).toFixed(1)}%"></div></div>
+      `;
+      contaminantListEl.appendChild(row);
+    });
+  }
+
+  if(growthInfoEl){
+    if(mushProb >= 0.8){
+      growthInfoEl.classList.add('active');
+      growthInfoEl.innerHTML = `Donggu probability ${formatPercent(mushProb)} — keep temp ${IDEAL.temp_range || `${formatNumber(IDEAL.temp_c,1)}°C`}, humidity ${IDEAL.humidity_range || `${formatNumber(IDEAL.humidity,1)}%RH`}, CO₂ ${IDEAL.co2_range || `${formatNumber(IDEAL.co2_ppm,0)} ppm`}, light ${IDEAL.light_range || `${formatNumber(IDEAL.light_lux,0)} lux`}.`;
+    }else{
+      growthInfoEl.classList.remove('active');
+      growthInfoEl.textContent = 'Donggu probability below 0.8 — waiting for a clearer frame before showing growth guidance…';
+    }
+  }
 }
 
 // --- camera preview ---
@@ -398,7 +464,7 @@ async function tick(){
     lightChart.data.datasets[0].data = lightData;
     lightChart.update('none');
 
-    updateLeakIndicator(n.light);
+    renderDetection(j.camera || {});
     updateBoundingBox(n);
   }catch(e){
     // ignore
