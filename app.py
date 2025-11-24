@@ -73,10 +73,15 @@ HUMID_HIGH_THRESHOLD = getattr(CFG, "HUMID_HIGH_THRESHOLD", 65.0)
 
 # 目标生长环境（用于前端差异提示）
 IDEAL_ENVIRONMENT = {
-    "temp_c": TEMP_SETPOINT,
-    "humidity": (HUMID_LOW_THRESHOLD + HUMID_HIGH_THRESHOLD) / 2,
-    "co2_ppm": (CO2_LOW_THRESHOLD + CO2_HIGH_THRESHOLD) / 2,
-    "light_lux": LIGHT_LOW_THRESHOLD,
+    # 参考菌丝阶段（Mycelial Run）的理想区间
+    "temp_c": 25.5,  # 24-27°C 区间中值
+    "humidity": 62.5,  # 60-65%RH 区间中值
+    "co2_ppm": 4000,  # 理想 3000-5000 ppm
+    "light_lux": 25,  # 0-50 lux
+    "temp_range": "24-27°C",
+    "humidity_range": "60-65%RH",
+    "co2_range": "3000-5000 ppm",
+    "light_range": "0-50 lux",
 }
 
 # OLED 配置（如未定义则用默认）
@@ -146,6 +151,10 @@ class CameraSupervisor:
         self.controller = controller
         self.mushroom_count = 0
         self.last_detection_ts: Optional[float] = None
+        self.last_detection_result: dict = {
+            "mushroom_confidence": 0.0,
+            "contaminants": [],
+        }
         self._stop_evt = threading.Event()
         self._th = threading.Thread(target=self._loop, name="camera-supervisor", daemon=True)
 
@@ -162,7 +171,17 @@ class CameraSupervisor:
         真正的图像识别逻辑可以替换这里。
         返回 dict，至少包含 count（识别出的目标蘑菇数量）。
         """
-        return {"count": self.mushroom_count, "confidence": 1.0}
+        # 这里仍然是占位逻辑：模拟一个置信度并携带常见污染物概率，便于前端展示。
+        mushroom_confidence = round(random.uniform(0.6, 0.98), 2)
+        contaminants = [
+            {"name": "绿霉", "prob": round(random.uniform(0.05, 0.22), 2)},
+            {"name": "黑曲霉", "prob": round(random.uniform(0.0, 0.12), 2)},
+        ]
+        return {
+            "count": 1 if mushroom_confidence >= 0.75 else 0,
+            "mushroom_confidence": mushroom_confidence,
+            "contaminants": contaminants,
+        }
 
     def _loop(self) -> None:
         while not self._stop_evt.is_set():
@@ -175,6 +194,7 @@ class CameraSupervisor:
                 time.sleep(CAMERA_LED_WARMUP_SEC)
                 result = self.perform_detection() or {}
                 self.mushroom_count = max(0, int(result.get("count") or 0))
+                self.last_detection_result = result
                 self.last_detection_ts = time.time()
             except Exception as e:
                 log.warning(f"camera detection loop error: {e}")
@@ -186,6 +206,7 @@ class CameraSupervisor:
             "mushroom_count": self.mushroom_count,
             "last_detection_ts": self.last_detection_ts,
             "led": "on" if self.controller.led_on else "off",
+            "detection": self.last_detection_result,
         }
 
 # ---- 硬件 / 服务实例 ----
