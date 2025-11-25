@@ -1,7 +1,6 @@
 import os, glob, time
 from typing import Optional, List
 
-# 建議已在 raspi-config 啟用 1-Wire
 os.system("modprobe w1-gpio >/dev/null 2>&1")
 os.system("modprobe w1-therm >/dev/null 2>&1")
 W1_BASE = "/sys/bus/w1/devices/"

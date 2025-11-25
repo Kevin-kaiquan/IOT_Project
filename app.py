@@ -1,18 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-主应用 app.py
-
-修改点（按你的最新需求）：
-1. 采集部分仍由 services.sampler.Sampler 完成，不改。
-2. 环境控制逻辑：
-   - 加热器（继电器）由 **两个温度探针 temp1 / temp2** 决定是否开启；
-   - 风扇默认由 **CO₂ 浓度** 决定；当相机识别到蘑菇后，改用 PID 以 CO₂ 目标浓度排风。
-   - LED 仅在相机识别前自动点亮（补光），不再参与环境光补偿。
-   - 环境湿度/温度直接由 **SCD41** 提供，湿度 rh_air 控制 GPIO17 雾化器。
-
-网页 /api/data 和 /api/atomizer 的接口保持不变，这样你的前端 dashboard 可以继续使用。
-"""
+"""Main application entry for environment monitoring and control."""
 import os
 import sys
 import time
@@ -38,12 +26,10 @@ except Exception:
 
 from config import *
 
-# ---- 保证项目根可导入 ----
 ROOT = os.path.dirname(os.path.abspath(__file__))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-# ---- 读取（或提供）配置 ----
 try:
     import config as CFG
 except Exception:
@@ -53,53 +39,43 @@ except Exception:
 SAMPLE_INTERVAL_SEC = getattr(CFG, "SAMPLE_INTERVAL_SEC", 3)
 DEFAULT_OVERRIDE_SEC = getattr(CFG, "MANUAL_OVERRIDE_SEC", 300)
 
-# 环境控制用的 setpoint / 阈值（如未在 config.py 里定义，则用默认值）
-TEMP_SETPOINT      = getattr(CFG, "TEMP_SETPOINT", 22.0)   # 加热目标温度（°C）
-TEMP_TOLERANCE     = getattr(CFG, "TEMP_TOLERANCE", 0.5)   # 温度允许波动
-CO2_HIGH_THRESHOLD = getattr(CFG, "CO2_HIGH_THRESHOLD", 1000.0)  # CO₂ 打开风扇阈值
-CO2_LOW_THRESHOLD  = getattr(CFG, "CO2_LOW_THRESHOLD", 800.0)    # CO₂ 关闭风扇阈值
-LIGHT_LOW_THRESHOLD = getattr(CFG, "LIGHT_LOW_THRESHOLD", 50.0)  # lux，低于此值就点亮 LED
+TEMP_SETPOINT      = getattr(CFG, "TEMP_SETPOINT", 22.0)
+TEMP_TOLERANCE     = getattr(CFG, "TEMP_TOLERANCE", 0.5)
+CO2_HIGH_THRESHOLD = getattr(CFG, "CO2_HIGH_THRESHOLD", 1000.0)
+CO2_LOW_THRESHOLD  = getattr(CFG, "CO2_LOW_THRESHOLD", 800.0)
+LIGHT_LOW_THRESHOLD = getattr(CFG, "LIGHT_LOW_THRESHOLD", 50.0)
 
-# 相机 & 风扇 PID 相关
 CO2_SAFE_TARGET = getattr(CFG, "CO2_SAFE_TARGET", 700.0)
 CO2_SAFE_STOP   = getattr(CFG, "CO2_SAFE_STOP", 650.0)
 CAMERA_LED_WARMUP_SEC = getattr(CFG, "CAMERA_LED_WARMUP_SEC", 0.8)
 CAMERA_DETECT_MIN_SEC = getattr(CFG, "CAMERA_DETECT_MIN_SEC", 5.0)
 CAMERA_DETECT_MAX_SEC = getattr(CFG, "CAMERA_DETECT_MAX_SEC", 10.0)
 
-# 环境湿度（来自 SCD41）控制 GPIO17（雾化器 / 喷雾器）用的湿度阈值
 HUMID_LOW_THRESHOLD  = getattr(CFG, "HUMID_LOW_THRESHOLD", 55.0)
 HUMID_HIGH_THRESHOLD = getattr(CFG, "HUMID_HIGH_THRESHOLD", 65.0)
 
-# 目标生长环境（用于前端差异提示）
 IDEAL_ENVIRONMENT = {
-    # 参考菌丝阶段（Mycelial Run）的理想区间
-    "temp_c": 25.5,  # 24-27°C 区间中值
-    "humidity": 62.5,  # 60-65%RH 区间中值
-    "co2_ppm": 4000,  # 理想 3000-5000 ppm
-    "light_lux": 25,  # 0-50 lux
+    "temp_c": 25.5,
+    "humidity": 62.5,
+    "co2_ppm": 4000,
+    "light_lux": 25,
     "temp_range": "24-27°C",
     "humidity_range": "60-65%RH",
     "co2_range": "3000-5000 ppm",
     "light_range": "0-50 lux",
 }
 
-# OLED 配置（如未定义则用默认）
 OLED_BUS    = getattr(CFG, "OLED_BUS", 1)
 OLED_ADDR   = getattr(CFG, "OLED_ADDR", 0x3C)
 OLED_ROTATE = getattr(CFG, "OLED_ROTATE", 0)
 OLED_FPS    = getattr(CFG, "OLED_FPS", 20)
 
-# ---- 日志 ----
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 log = logging.getLogger("app")
 
 
 class SimplePID:
-    """简易 PID，用于风扇按 CO₂ 目标控制。
-
-    输出是一个无量纲的数值；在当前项目中，只需要判断是否 >0 来决定是否拉高风扇继电器。
-    """
+    """Minimal PID controller for fan speed decisions."""
 
     def __init__(
         self,
@@ -139,13 +115,7 @@ class SimplePID:
 
 
 class CameraSupervisor:
-    """
-    负责：
-    - 按 5~10s 周期自动点亮 LED → 运行识别 → 关闭 LED
-    - 记录最近一次识别的蘑菇数量（供风扇 PID 使用）
-
-    识别本身在 perform_detection() 里留了扩展口，当前作为占位返回现有计数。
-    """
+    """Schedule camera detections and track recent results."""
 
     def __init__(self, controller: "DeviceController") -> None:
         self.controller = controller
@@ -167,11 +137,7 @@ class CameraSupervisor:
         self._th.join(timeout=1.0)
 
     def perform_detection(self) -> dict:
-        """
-        真正的图像识别逻辑可以替换这里。
-        返回 dict，至少包含 count（识别出的目标蘑菇数量）。
-        """
-        # 这里仍然是占位逻辑：模拟一个置信度并携带常见污染物概率，便于前端展示。
+        """Placeholder detection hook that can be replaced with real logic."""
         mushroom_confidence = round(random.uniform(0.6, 0.98), 2)
         contaminants = [
             {"name": "绿霉", "prob": round(random.uniform(0.05, 0.22), 2)},
@@ -209,45 +175,34 @@ class CameraSupervisor:
             "detection": self.last_detection_result,
         }
 
-# ---- 硬件 / 服务实例 ----
 from actuators.atomizer import Atomizer
 from services.camera import CameraManager
 from services.sampler import Sampler
 from services.oled import OledDisplay
 from sensors.EnvironmentController import DeviceController
 
-# 雾化器（GPIO17），注意：我们用 SCD41 的湿度自动控制它
 atomizer = Atomizer(pin=ATOMIZER_PIN, active_high=ATOMIZER_ACTIVE_HIGH, initial=False)
 atexit.register(atomizer.cleanup)
 
-# 远程控制（含小程序）用的“临时强制状态”缓存
 _manual_overrides = {
-    # name -> {"on": bool, "expires_at": float}
 }
 
-# 采样线程：负责从 SCD41 / DS18B20 / VEML7700 读取数据
 sampler = Sampler(interval_sec=SAMPLE_INTERVAL_SEC)
 sampler.start()
 
-# 环境控制器：负责 Heater / Fan / LED 三个 GPIO
 device_controller = DeviceController(HEATER_PIN, FAN_PIN, LED_PIN)
 
-# 相机 LED/检测调度器
 camera_supervisor = CameraSupervisor(device_controller)
 atexit.register(camera_supervisor.stop)
 
-# 相机采集（最多两个 USB 摄像头）
 camera_manager = CameraManager(device_indices=[0, 1])
 atexit.register(camera_manager.cleanup)
 
-# OLED 显示
 oled = OledDisplay(bus=OLED_BUS, addr=OLED_ADDR, rotate=OLED_ROTATE, fps=OLED_FPS)
 
-# ---- Flask app ----
 app = Flask(__name__, template_folder="templates", static_folder="static")
 
 
-# ======================= Web 路由 =======================
 @app.route("/")
 def index():
     return render_template(
@@ -258,7 +213,7 @@ def index():
 
 
 def _cleanup_overrides() -> None:
-    """清理过期的手动指令。"""
+    """Remove expired manual override instructions."""
     now = time.time()
     for name, info in list(_manual_overrides.items()):
         exp = info.get("expires_at")
@@ -292,13 +247,10 @@ def _serialize_overrides() -> dict:
 
 @app.route("/api/data")
 def api_data():
-    """
-    返回最新传感器数据，同时刷新 OLED 上的数值。
-    """
+    """Return the latest sensor snapshot and refresh OLED content."""
     snap = sampler.snapshot()
     now = snap.get("now", {}) or {}
 
-    # 刷新 OLED
     try:
         oled.show_numbers(
             co2_ppm=now.get("co2_ppm"),
@@ -310,7 +262,6 @@ def api_data():
     except Exception:
         pass
 
-    # 把雾化器、设备、相机状态也附加给前端显示
     snap["atomizer"] = atomizer.state
     snap["devices"] = device_controller.states
     snap["camera"] = camera_supervisor.status()
@@ -321,7 +272,7 @@ def api_data():
 
 @app.route("/api/camera/<int:cam_id>/frame")
 def api_camera_frame(cam_id: int):
-    """返回指定摄像头的 JPEG 帧（camera id 由操作系统分配，通常是 0 或 1）。"""
+    """Return a JPEG frame for the requested camera id."""
     try:
         frame = camera_manager.get_frame(cam_id)
     except KeyError:
@@ -338,16 +289,13 @@ def api_camera_frame(cam_id: int):
 
 @app.route("/api/camera/status")
 def api_camera_status():
-    """简单返回两个摄像头的就绪情况，便于前端判断是否有画面。"""
+    """Return readiness information for configured cameras."""
     return jsonify(ok=True, cameras=camera_manager.status())
 
 
 @app.route("/api/atomizer", methods=["GET", "POST"])
 def api_atomizer():
-    """
-    手动开关 GPIO17（雾化器）。注意：环境控制线程也会根据 SCD41 湿度自动控制它，
-    所以这里只是「临时」指令，之后可能被自动逻辑覆盖。
-    """
+    """Temporarily toggle the atomizer via manual override."""
     if request.method == "POST":
         data = request.get_json(silent=True) or {}
         state = (data.get("state") or "").lower()
@@ -399,7 +347,7 @@ def api_control():
             device_controller.set_fan(is_on)
         elif device == "led":
             device_controller.set_led(is_on)
-        else:  # atomizer
+        else:
             atomizer.set(is_on)
 
         return jsonify(
@@ -415,9 +363,7 @@ def api_control():
 
 @app.route("/api/oled/text")
 def api_oled_text():
-    """
-    调试接口：在 OLED 上闪现一段文字几秒钟。
-    """
+    """Flash short text on the OLED for debugging."""
     text = request.args.get("text") or ""
     if not text:
         return jsonify(ok=False, message="text required"), 400
@@ -426,15 +372,8 @@ def api_oled_text():
     return jsonify(ok=True)
 
 
-# ======================= 环境控制核心逻辑 =======================
 def _control_atomizer_with_rh(rh_air: Optional[float]) -> None:
-    """
-    使用环境相对湿度 rh_air 决定是否开启 GPIO17（雾化器）。
-    规则：
-      rh_air < HUMID_LOW_THRESHOLD  -> 打开雾化器 (GPIO17)
-      rh_air > HUMID_HIGH_THRESHOLD -> 关闭雾化器
-      中间区间保持原来的状态不变，形成一个「湿度死区」，避免频繁开关。
-    """
+    """Toggle the atomizer based on relative humidity thresholds."""
     if rh_air is None:
         return
 
@@ -447,17 +386,10 @@ def _control_atomizer_with_rh(rh_air: Optional[float]) -> None:
         atomizer.set(True)
     elif rh > HUMID_HIGH_THRESHOLD:
         atomizer.set(False)
-    # 中间区间不动 atomizer.state
 
 
 def control_task():
-    """
-    后台线程：每隔几秒读取最新样本，根据规则控制：
-      - heater : 由 temp1_c / temp2_c 决定；
-      - fan    : 当识别到蘑菇时采用 PID 将 CO₂ 拉到安全值；否则使用滞回阈值；
-      - led    : 不再跟随光照；由 CameraSupervisor 在识别前点亮；
-      - atomizer(GPIO17) : 由 SCD41 的 rh_air 决定。
-    """
+    """Background loop that applies control rules using recent samples."""
     log.info("Environment control thread started")
     fan_pid = SimplePID(setpoint=CO2_SAFE_TARGET)
     while True:
@@ -468,10 +400,9 @@ def control_task():
         t1    = now.get("temp1_c")
         t2    = now.get("temp2_c")
         light = now.get("light")
-        rh    = now.get("rh_air")     # SCD41 的湿度，用来控制 GPIO17
+        rh    = now.get("rh_air")
         mushrooms = camera_supervisor.mushroom_count
 
-        # 1) Heater 按探针控制；Fan 仅在“无识别”模式下由阈值控制
         manage_fan = mushrooms <= 0
         device_controller.update_environment(
             temp1=t1,
@@ -485,7 +416,6 @@ def control_task():
             manage_fan=manage_fan,
         )
 
-        # 如果有手动覆盖指令，优先执行
         heater_manual = _get_override_state("heater")
         fan_manual = _get_override_state("fan")
         led_manual = _get_override_state("led")
@@ -495,14 +425,12 @@ def control_task():
         if led_manual is not None:
             device_controller.set_led(led_manual)
 
-        # 2) 使用 SCD41 湿度控制 GPIO17（通过 Atomizer）
         atom_manual = _get_override_state("atomizer")
         if atom_manual is not None:
             atomizer.set(atom_manual)
         else:
             _control_atomizer_with_rh(rh)
 
-        # 3) 风扇：若识别到蘑菇，用 PID 将 CO2 拉到安全值；否则沿用阈值逻辑
         if fan_manual is not None:
             device_controller.set_fan(fan_manual)
         elif mushrooms > 0 and co2 is not None:
@@ -517,7 +445,6 @@ def control_task():
         time.sleep(SAMPLE_INTERVAL_SEC)
 
 
-# 在 Flask 第一次收到请求时启动环境控制线程
 @app.before_first_request
 def _start_background_threads():
     th = threading.Thread(target=control_task, name="env-control", daemon=True)
@@ -527,7 +454,6 @@ def _start_background_threads():
     log.info("Camera supervisor thread started")
 
 
-# ======================= main =======================
 if __name__ == "__main__":
     host, port = "0.0.0.0", 5000
     log.info("Running on http://%s:%d", host, port)
