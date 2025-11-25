@@ -17,22 +17,16 @@ def _crc8(two: bytes) -> int:
     return c
 
 class SCD41:
-    """
-    稳态驱动：
-    - 地址探测用 get_data_ready_status（任何状态都可读）
-    - start(): stop→reinit→start，统一设备状态
-    - read_cached(): 失败优先返回缓存；连续 I/O 错误自动软复位
-    """
+    """Stable SCD41 driver with cached reads."""
     def __init__(self, busno=1, addr: Optional[int]=None, addr_candidates: Iterable[int]=(0x62,0x64)):
         self.busno=busno
         self.addr=addr
         self.cands=list(addr_candidates)
         self.started=False
-        self._last: Optional[Tuple[float,float,float,float]] = None  # ts,co2,tC,rh
+        self._last: Optional[Tuple[float,float,float,float]] = None
         self._last_ts=0.0
         self._err_streak=0
 
-    # ---- low level ----
     def _w(self, cmd:int, args:List[int]=None):
         if self.addr is None: raise RuntimeError("addr not set")
         data=[(cmd>>8)&0xFF, cmd&0xFF]
@@ -50,7 +44,6 @@ class SCD41:
             if delay_ms: time.sleep(delay_ms/1000.0)
             rd=i2c_msg.read(self.addr, n); bus.i2c_rdwr(rd); return bytes(list(rd))
 
-    # ---- helpers ----
     def _probe_ready(self, a:int)->bool:
         try:
             with SMBus(self.busno) as bus:
@@ -74,21 +67,18 @@ class SCD41:
                 return
         raise RuntimeError(f"SCD41 not found in {self.cands}")
 
-    # ---- control ----
     def start(self):
         self._ensure_addr()
-        # 统一状态：停测→复位→启动
         try:
-            self._w(0x3F86); time.sleep(1.0)  # stop
+            self._w(0x3F86); time.sleep(1.0)
         except Exception:
             pass
-        self._w(0x3646); time.sleep(0.02)     # reinit
-        self._w(0x21B1)                       # start periodic
+        self._w(0x3646); time.sleep(0.02)
+        self._w(0x21B1)
         self.started=True
         self._last_ts=0.0
         self._err_streak=0
 
-    # ---- reading ----
     def _ready(self)->bool:
         b=self._r(0xE4B8,3)
         msb,lsb,crc=b[0],b[1],b[2]
@@ -110,7 +100,7 @@ class SCD41:
         self._ensure_addr()
         if not self.started:
             self.start()
-            time.sleep(5.2)  # 等首帧
+            time.sleep(5.2)
 
         now=time.time()
         if self._last and (now-self._last_ts)<min_interval_sec:
@@ -128,7 +118,7 @@ class SCD41:
             return co2,tC,rh
 
         except OSError as e:
-            # Errno 5/121: I/O 错误/远端无应答，做软复位自愈
+            # Handle common I/O errors with soft reset
             if getattr(e, "errno", None) in (5, 121):
                 self._err_streak += 1
                 log.warning(f"SCD41 read failed: {e} (streak={self._err_streak})")

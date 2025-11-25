@@ -1,33 +1,3 @@
-# sensors/EnvironmentController.py
-"""
-EnvironmentController / DeviceController
-
-本模块只负责根据**已经采到的数据**控制三样东西：
-- 加热器（通过继电器，HEATER_PIN）
-- 风扇（FAN_PIN）
-- 指示 LED（LED_PIN，现由相机线程按需拉高）
-
-传感器数据从 services.sampler.Sampler 那边来，由 app.py 周期性调用
-DeviceController.update_environment(...) 完成控制。
-
-逻辑（按照你现在的需求）：
-1. 加热器 heater
-   - 由两个探针温度 temp1 / temp2 决定
-   - 使用它们的平均值 T_avg：
-       如果 T_avg < TEMP_SET - TEMP_TOL  -> 打开加热器
-       如果 T_avg > TEMP_SET + TEMP_TOL  -> 关闭加热器
-   - 如果某一个温度 None，就用另一个；都 None 就跳过，不动继电器
-
-2. 风扇 fan
-   - 默认使用 CO₂ 浓度 co2_ppm：
-       如果 CO2 > CO2_HIGH -> 打开风扇
-       如果 CO2 < CO2_LOW  -> 关闭风扇
-     （CO2_HIGH > CO2_LOW 形成一个简单的“滞回”，避免频繁抖动）
-   - 当相机识别到蘑菇时，app.py 会改用 PID 逻辑并在 update_environment 时
-     传入 manage_fan=False，避免与这里的阈值逻辑冲突。
-
-LED 不再受光照阈值自动控制，改为相机采集线程或 API 强制开关。
-"""
 from __future__ import annotations
 
 import time
@@ -35,7 +5,7 @@ from typing import Optional
 
 try:
     import RPi.GPIO as GPIO  # type: ignore
-except Exception:  # 在非树莓派环境下做个 Mock，方便调试
+except Exception:  # Provide GPIO mock when hardware is unavailable
     class _MockGPIO:
         BCM = BOARD = OUT = IN = LOW = HIGH = 0
         def setwarnings(self, *a, **k): pass
@@ -49,6 +19,7 @@ from config import HEATER_PIN, FAN_PIN, LED_PIN
 
 
 class DeviceController:
+    """Controls heater, fan, and LED outputs."""
     def __init__(
         self,
         heater_pin: int = HEATER_PIN,
@@ -70,14 +41,12 @@ class DeviceController:
         self.fan_on = False
         self.led_on = False
 
-        # 记录上一次改变状态的时间，后面如果想加最小间隔限制可以用到
         self._last_change = {
             "heater": 0.0,
             "fan": 0.0,
             "led": 0.0,
         }
 
-    # ---------------- 低层封装：真正去拉 GPIO ----------------
     def _set_pin(self, name: str, pin: int, on: bool) -> None:
         now = time.time()
         self._last_change[name] = now
@@ -98,7 +67,6 @@ class DeviceController:
             self.led_on = on
             self._set_pin("led", self.led_pin, on)
 
-    # ---------------- 直接控制：提供给外部强制拉高/拉低 ----------------
     def set_heater(self, on: bool) -> None:
         self._set_heater(bool(on))
 
@@ -108,7 +76,6 @@ class DeviceController:
     def set_led(self, on: bool) -> None:
         self._set_led(bool(on))
 
-    # ---------------- 高层逻辑：根据数据做决策 ----------------
     def update_environment(
         self,
         temp1: Optional[float],
@@ -123,16 +90,7 @@ class DeviceController:
         manage_fan: bool = True,
         manage_heater: bool = True,
     ) -> None:
-        """
-        主入口：由 app.py 周期性调用。
-
-        参数：
-          temp1, temp2 : 两个温度探针（单位 °C）
-          co2_ppm      : CO₂ 浓度（ppm）
-          light        : VEML7700 光照强度（lux）
-        """
-
-        # ---- 1) 加热器：根据两个温度传感器 ----
+        """Apply heater and fan rules based on sensor inputs."""
         if manage_heater:
             avg_temp: Optional[float] = None
             if temp1 is not None and temp2 is not None:
@@ -144,26 +102,17 @@ class DeviceController:
 
             if avg_temp is not None:
                 if avg_temp < temp_set - temp_tolerance:
-                    # 温度偏低 → 打开加热器
                     self._set_heater(True)
                 elif avg_temp > temp_set + temp_tolerance:
-                    # 温度明显高于设定 → 关闭加热器
                     self._set_heater(False)
-                # 否则落在中间“死区”，保持原状态不变
-            # 如果完全读不到温度，就保持 heater 当前状态，不瞎动
 
-        # ---- 2) 风扇：只看 CO₂ ----
         if manage_fan and co2_ppm is not None:
             co2_val = float(co2_ppm)
             if co2_val > co2_high:
-                # CO2 很高 → 打开风扇排风
                 self._set_fan(True)
             elif co2_val < co2_low:
-                # CO2 已经降下来 → 关闭风扇
                 self._set_fan(False)
-            # 中间区域同样保持原状态
 
-    # ---------------- 供 API 查询当前状态 ----------------
     @property
     def states(self) -> dict:
         return {
@@ -177,20 +126,3 @@ class DeviceController:
             GPIO.cleanup()
         except Exception:
             pass
-
-
-# 命令行简单自测（连接好硬件再用）
-if __name__ == "__main__":
-    import time
-    dc = DeviceController()
-    try:
-        for i in range(10):
-            t1 = 20 + i * 0.3
-            t2 = 20 + i * 0.2
-            co2 = 600 + i * 80
-            light = 30 + i * 5
-            print(f"[demo] t1={t1:.1f} t2={t2:.1f} co2={co2:.0f} light={light:.0f}")
-            dc.update_environment(t1, t2, co2, light)
-            time.sleep(1.0)
-    finally:
-        dc.cleanup()

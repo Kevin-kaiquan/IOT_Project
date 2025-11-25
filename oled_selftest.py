@@ -3,7 +3,7 @@ from luma.core.interface.serial import i2c
 from luma.oled.device import ssd1306
 from PIL import Image, ImageDraw, ImageFont
 
-ADDR = 0x3C  # 如果 i2cdetect 是 3d 就改 0x3D
+ADDR = 0x3C
 dev = ssd1306(i2c(port=1, address=ADDR), width=128, height=64)
 try:
     font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 18)

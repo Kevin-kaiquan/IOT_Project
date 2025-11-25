@@ -1,15 +1,4 @@
-"""Lightweight multi-camera helper built on OpenCV.
-
-This module keeps a tiny cache of ``cv2.VideoCapture`` objects so we don't
-re-open the device on every HTTP request. It exposes a simple ``get_frame``
-method that returns a JPEG-encoded snapshot for the requested camera index.
-
-The helper is intentionally defensive:
-- invalid camera IDs raise ``KeyError``
-- failed reads trigger a single re-open attempt
-- ``cleanup()`` releases all cached captures so Flask shutdowns don't leave
-  devices locked
-"""
+"""Manage cached OpenCV captures and provide JPEG frames."""
 from __future__ import annotations
 
 import threading
@@ -32,7 +21,6 @@ class CameraManager:
         self._captures: Dict[int, cv2.VideoCapture] = {}
         self._lock = threading.Lock()
 
-    # ---- lifecycle helpers ----
     def _open_capture(self, cam_id: int) -> cv2.VideoCapture | None:
         cap = cv2.VideoCapture(cam_id)
         if not cap.isOpened():
@@ -53,7 +41,6 @@ class CameraManager:
                 self._captures[cam_id] = cap
         return cap
 
-    # ---- public API ----
     def get_frame(self, cam_id: int) -> bytes:
         if cam_id not in self.device_indices:
             raise KeyError(f"Camera {cam_id} not allowed")
@@ -65,7 +52,6 @@ class CameraManager:
 
             ok, frame = cap.read()
             if not ok or frame is None:
-                # try once more after reopening
                 cap.release()
                 self._captures.pop(cam_id, None)
                 cap = self._get_capture(cam_id)
@@ -81,7 +67,6 @@ class CameraManager:
         return buf.tobytes()
 
     def status(self) -> List[dict]:
-        # check availability without locking the devices for long
         result: List[dict] = []
         with self._lock:
             for cam_id in self.device_indices:

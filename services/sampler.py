@@ -1,7 +1,7 @@
 import threading, time, random, logging
 from collections import deque
 from typing import Optional, Dict, Any, Tuple
-from sensors.veml7700 import VEML7700  # Import the VEML7700 class
+from sensors.veml7700 import VEML7700
 
 try:
     import config as CFG
@@ -28,7 +28,6 @@ class Sampler:
         self._stop = threading.Event()
         self._th = threading.Thread(target=self._loop, daemon=True)
 
-        # --- VEML7700 for Light Intensity ---
         self.veml7700: Optional[VEML7700] = None
         try:
             self.veml7700 = VEML7700(busno=VEML7700_I2C_BUS, addr=VEML7700_I2C_ADDR)
@@ -37,7 +36,6 @@ class Sampler:
             log.error(f"VEML7700 init failed: {e}")
             self.veml7700 = None
 
-        # --- SCD41 for CO2 + air T/RH ---
         self.scd41: Optional[SCD41] = None
         try:
             self.scd41 = SCD41(busno=SCD41_I2C_BUS, addr=None, addr_candidates=SCD41_ADDRS)
@@ -65,7 +63,6 @@ class Sampler:
                 return round(co2, 1), round(t_air, 2), round(rh_air, 1), "scd41"
             except Exception as e:
                 log.warning(f"SCD41 read exception -> mock: {e}")
-        # fallback mock using last known env for continuity
         last_co2, last_t, last_rh = self._last_env
         self._co2_mock = max(400.0, min(2000.0, self._co2_mock + random.uniform(-15, 15)))
         return (
@@ -90,7 +87,7 @@ class Sampler:
         """Reads light intensity from VEML7700 sensor"""
         if self.veml7700:
             try:
-                lux = self.veml7700.read_light()  # Get light intensity from VEML7700
+                lux = self.veml7700.read_light()
                 return round(lux, 2)
             except Exception as e:
                 log.warning(f"VEML7700 read failed: {e}")
@@ -101,7 +98,7 @@ class Sampler:
         while not self._stop.is_set():
             co2, t_air, rh_air, co2_src = self._read_scd41()
             t1, t2 = self._read_probe_t()
-            light_intensity = self._read_light()  # Get light intensity from VEML7700
+            light_intensity = self._read_light()
 
             self.history.append({
                 "ts": datetime.now().isoformat(timespec="seconds"),
@@ -111,7 +108,7 @@ class Sampler:
                 "rh_air": rh_air,
                 "temp1_c": None if t1 is None else round(t1, 2),
                 "temp2_c": None if t2 is None else round(t2, 2),
-                "light": light_intensity  # Add light intensity to history
+                "light": light_intensity
             })
             time.sleep(self.interval)
 

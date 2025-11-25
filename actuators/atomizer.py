@@ -12,16 +12,12 @@ except Exception:
     GPIO = _MockGPIO()
 
 class Atomizer:
-    """
-    active_high=True  -> 高电平=ON（少见）
-    active_high=False -> 低电平=ON（你的情况）
-    """
+    """Atomizer control with configurable polarity."""
     def __init__(self, pin: int, active_high: bool = True, initial: bool = False):
         self.pin = pin
         self.active_high = active_high
         GPIO.setwarnings(False)
         GPIO.setmode(GPIO.BCM)
-        # 关机电平：active_high=True -> LOW；active_high=False -> HIGH
         off_level = GPIO.LOW if active_high else GPIO.HIGH
         GPIO.setup(self.pin, GPIO.OUT, initial=off_level)
         self._state = False
