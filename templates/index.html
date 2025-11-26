@@ -59,6 +59,8 @@
   .target-quick{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px}
   .target-chip{padding:8px 10px;border-radius:10px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.05);font-size:12px;color:#b6c5f3;line-height:1.4}
   .target-chip strong{display:block;color:#e7ecff;margin-bottom:2px}
+  .alert{padding:10px 12px;border-radius:10px;background:rgba(255,122,138,.12);border:1px solid rgba(255,122,138,.4);color:#ffd6de;font-size:13px}
+  .alert strong{color:#fff}
 </style>
 </head>
 <body>
@@ -122,22 +124,23 @@
       <div class="camera-frame">
         <img id="cameraFeed" class="camera-feed" aria-label="Target mushroom camera preview" alt="Live camera preview" />
         <div class="bbox" id="bbox">
-          <div class="bbox-label">Target</div>
-          <div class="bbox-diff" id="bboxDiff">Waiting for data…</div>
+          <div class="bbox-label">Detection</div>
+          <div class="bbox-diff" id="bboxDiff">Waiting for detections…</div>
         </div>
       </div>
       <div class="detection-panel">
         <div class="row spread">
           <div>
-            <div style="font-size:13px;color:var(--muted)">冬菇出现概率</div>
+            <div style="font-size:13px;color:var(--muted)">Shiitake probability</div>
             <div class="value small" id="mushroomProb">--</div>
           </div>
-          <div class="chip" id="lastDetect">检测时间: --</div>
+          <div class="chip" id="lastDetect">Last detection: --</div>
         </div>
-        <div class="progress" aria-label="冬菇概率">
+        <div class="progress" aria-label="Shiitake probability">
           <div class="progress-bar" id="mushroomProbBar"></div>
         </div>
-        <div class="growth-info" id="growthInfo">等待检测数据…</div>
+        <div class="growth-info" id="growthInfo"></div>
+        <div class="alert" id="alienAlert" style="display:none"></div>
         <div class="contaminant-list" id="contaminantList"></div>
         <div class="target-quick" id="targetQuick"></div>
       </div>
@@ -279,9 +282,9 @@ function updateBoundingBox(now){
 function renderTargetQuick(){
   if(!targetQuickEl) return;
   const metrics = [
-    {label:'温度陡度指数', desc:'T_env - T_deep，过高会抑制生长、损耗营养'},
-    {label:'CO₂ 变化率', desc:'ΔCO₂ / Δt，急升或急降提示风机/气体调节阶段'},
-    {label:'湿度稳定指数', desc:'std(24h humidity)，数值越低越平稳'},
+    {label:'Temperature gradient index', desc:'T_env - T_deep; too high suppresses growth and wastes nutrients'},
+    {label:'CO₂ change rate', desc:'ΔCO₂ / Δt; spikes or drops hint at ventilation or gas dosing'},
+    {label:'Humidity stability index', desc:'std(24h humidity); lower variance means steadier pins'},
   ];
   targetQuickEl.innerHTML = metrics.map(m=>`<div class="target-chip"><strong>${m.label}</strong><span>${m.desc}</span></div>`).join('');
 }
@@ -298,18 +301,38 @@ function setProgressBar(el, value, danger=false){
   el.classList.toggle('danger', danger);
 }
 
-function renderDetection(cameraData={}){
-  const detection = cameraData.detection || {};
-  const mushProb = typeof detection.mushroom_confidence === 'number'
-    ? detection.mushroom_confidence
-    : (typeof detection.confidence === 'number' ? detection.confidence : 0);
+function detectionReason(env){
+  const reasons = [];
+  if(typeof env.light === 'number' && typeof IDEAL.light_lux === 'number' && env.light > IDEAL.light_lux * 2){
+    reasons.push('Lighting is well above the ideal range.');
+  }
+  if(typeof env.rh_air === 'number' && typeof IDEAL.humidity === 'number' && env.rh_air < IDEAL.humidity - 8){
+    reasons.push('Humidity is low; dryness can favor unwanted species.');
+  }
+  if(typeof env.co2_ppm === 'number' && typeof IDEAL.co2_ppm === 'number' && env.co2_ppm < IDEAL.co2_ppm - 500){
+    reasons.push('CO₂ is below the mushroom target range, allowing more oxygen for contaminants.');
+  }
+  return reasons;
+}
 
-  if(mushroomProbEl) mushroomProbEl.textContent = formatPercent(mushProb);
-  if(mushroomProbBarEl) setProgressBar(mushroomProbBarEl, mushProb);
+function renderDetection(cameraData={}, envNow={}){
+  const detection = cameraData.detection || {};
+  const targetCount = typeof detection.target_count === 'number' ? detection.target_count : 0;
+  const alienCount = typeof detection.alien_count === 'number' ? detection.alien_count : 0;
+  const targetProb = typeof detection.target_confidence === 'number' ? detection.target_confidence : 0;
+  const alienProb = typeof detection.alien_confidence === 'number' ? detection.alien_confidence : 0;
+
+  const summary = [];
+  if(targetCount > 0) summary.push(`${targetCount} shiitake`);
+  if(alienCount > 0) summary.push(`${alienCount} button`);
+  bboxDiffEl.textContent = summary.length ? summary.join(' · ') : 'No mushrooms detected yet';
+
+  if(mushroomProbEl) mushroomProbEl.textContent = formatPercent(targetProb);
+  if(mushroomProbBarEl) setProgressBar(mushroomProbBarEl, targetProb);
 
   if(lastDetectEl){
     const ts = cameraData.last_detection_ts ? new Date(cameraData.last_detection_ts*1000) : null;
-    lastDetectEl.textContent = ts ? `检测时间: ${ts.toLocaleTimeString()}` : '检测时间: --';
+    lastDetectEl.textContent = ts ? `Last detection: ${ts.toLocaleTimeString()}` : 'Last detection: --';
   }
 
   if(contaminantListEl){
@@ -319,7 +342,7 @@ function renderDetection(cameraData={}){
       const row = document.createElement('div');
       row.className = 'contam-row';
       row.innerHTML = `
-        <div class="row"><div>${item.name || '污染物'}</div><div class="pill compact">${formatPercent(prob)}</div></div>
+        <div class="row"><div>${item.name || 'Other object'}</div><div class="pill compact">${formatPercent(prob)}</div></div>
         <div class="progress small"><div class="progress-bar danger" style="width:${(Math.max(0, Math.min(1, prob))*100).toFixed(1)}%"></div></div>
       `;
       contaminantListEl.appendChild(row);
@@ -327,12 +350,32 @@ function renderDetection(cameraData={}){
   }
 
   if(growthInfoEl){
-    if(mushProb >= 0.8){
+    if(targetCount > 0){
       growthInfoEl.classList.add('active');
-      growthInfoEl.innerHTML = `冬菇概率 ${formatPercent(mushProb)}，维持温度 ${IDEAL.temp_range || `${formatNumber(IDEAL.temp_c,1)}°C`}、湿度 ${IDEAL.humidity_range || `${formatNumber(IDEAL.humidity,1)}%RH`}、CO₂ ${IDEAL.co2_range || `${formatNumber(IDEAL.co2_ppm,0)} ppm`}、光照 ${IDEAL.light_range || `${formatNumber(IDEAL.light_lux,0)} lux`}。`;
+      const tempAvg = average([envNow.temp1_c, envNow.temp2_c]);
+      const envParts = [
+        `Temp: ${formatNumber(tempAvg,1)}°C`,
+        `Humidity: ${formatNumber(envNow.rh_air,1)}%RH`,
+        `CO₂: ${formatNumber(envNow.co2_ppm,0)} ppm`,
+        `Light: ${formatNumber(envNow.light,0)} lux`
+      ];
+      growthInfoEl.innerHTML = `Shiitake detected (${formatPercent(targetProb)}). Keep ${envParts.join(' · ')} near the ideal ranges.`;
     }else{
       growthInfoEl.classList.remove('active');
-      growthInfoEl.textContent = '冬菇概率不足 0.8，等待清晰画面后再展示生长信息…';
+      growthInfoEl.textContent = '';
+    }
+  }
+
+  const alertEl = document.getElementById('alienAlert');
+  if(alertEl){
+    if(alienCount > 0){
+      const reasons = detectionReason(envNow);
+      const reasonText = reasons.length ? ` Possible causes: ${reasons.join(' ')}` : '';
+      alertEl.style.display = 'block';
+      alertEl.innerHTML = `<strong>Alert:</strong> Button mushroom detected (${formatPercent(alienProb)}).${reasonText}`;
+    }else{
+      alertEl.style.display = 'none';
+      alertEl.textContent = '';
     }
   }
 }
@@ -464,7 +507,7 @@ async function tick(){
     lightChart.data.datasets[0].data = lightData;
     lightChart.update('none');
 
-    renderDetection(j.camera || {});
+    renderDetection(j.camera || {}, n);
     updateBoundingBox(n);
   }catch(e){
     // ignore
