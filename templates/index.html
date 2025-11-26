@@ -394,9 +394,14 @@ function renderDetection(cameraData={}){
   latestDetection = detection;
   const detected = !!detection.detected;
   const label = (detection.label || '').toLowerCase();
-  const mushProb = detected && typeof detection.mushroom_confidence === 'number'
-    ? detection.mushroom_confidence
-    : (detected && typeof detection.probability === 'number' ? detection.probability : 0);
+  let mushProb = 0;
+  if(detected){
+    if(label === targetLabel && typeof detection.mushroom_confidence === 'number'){
+      mushProb = detection.mushroom_confidence;
+    }else if(typeof detection.probability === 'number'){
+      mushProb = detection.probability;
+    }
+  }
   const isDanger = detected && dangerLabels.includes(label) && mushProb >= dangerThreshold;
   const isTarget = detected && label === targetLabel && mushProb >= targetThreshold;
   const hasDetection = isDanger || isTarget;

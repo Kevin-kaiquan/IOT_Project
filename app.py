@@ -188,18 +188,34 @@ class CameraSupervisor:
         data = self._run_model(frame)
         predictions = data.get("predictions") or []
 
-        target_label = "shiitake"
-        danger_labels = {"mold", "fly agaric"}
+        target_labels = {"shiitake", "shitake"}
+        danger_labels = {"mold", "fly agaric", "fly_agaric", "flyagaric"}
 
-        mush_conf = 0.0
-        top_prediction = predictions[0] if predictions else None
-        top_label = str((top_prediction or {}).get("class") or data.get("label") or "").lower()
-        top_prob = self._normalize_conf((top_prediction or {}).get("confidence") or data.get("probability") or 0.0)
+        best_target: tuple[str, float] | None = None
+        best_danger: tuple[str, float] | None = None
 
         for p in predictions:
             label = str(p.get("class") or "").lower()
-            if label == target_label:
-                mush_conf = max(mush_conf, self._normalize_conf(p.get("confidence")))
+            conf = self._normalize_conf(p.get("confidence"))
+            if label in target_labels:
+                if best_target is None or conf > best_target[1]:
+                    best_target = (label, conf)
+            if label in danger_labels:
+                if best_danger is None or conf > best_danger[1]:
+                    best_danger = (label, conf)
+
+        detection_label = ""
+        detection_prob = 0.0
+        mush_conf = 0.0
+        top_prediction = None
+
+        if best_target and best_target[1] >= TARGET_CONFIDENCE_MIN:
+            detection_label, detection_prob = best_target
+            mush_conf = detection_prob
+            top_prediction = next((p for p in predictions if str(p.get("class") or "").lower() == detection_label), None)
+        elif best_danger and best_danger[1] >= DANGER_CONFIDENCE_MIN:
+            detection_label, detection_prob = best_danger
+            top_prediction = next((p for p in predictions if str(p.get("class") or "").lower() == detection_label), None)
 
         contaminants = [
             {
@@ -211,10 +227,8 @@ class CameraSupervisor:
             and self._normalize_conf(p.get("confidence")) >= DANGER_CONFIDENCE_MIN
         ]
 
-        has_target = top_label == target_label and top_prob >= TARGET_CONFIDENCE_MIN
-        has_danger = top_label in danger_labels and top_prob >= DANGER_CONFIDENCE_MIN
-        detection_label = top_label if (has_target or has_danger) else ""
-        detection_prob = top_prob if (has_target or has_danger) else 0.0
+        has_target = bool(detection_label) and detection_label in target_labels
+        has_danger = bool(detection_label) and detection_label in danger_labels
         has_prediction = has_target or has_danger
         count = 1 if has_target else 0
 
