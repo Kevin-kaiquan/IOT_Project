@@ -134,6 +134,7 @@ class CameraSupervisor:
         self.last_detection_result: dict = {
             "mushroom_confidence": 0.0,
             "contaminants": [],
+            "has_predictions": False,
         }
         self._stop_evt = threading.Event()
         self._th = threading.Thread(target=self._loop, name="camera-supervisor", daemon=True)
@@ -156,6 +157,9 @@ class CameraSupervisor:
         raise RuntimeError("no camera frame available")
 
     def _send_to_roboflow(self, frame: bytes) -> dict:
+        if not frame:
+            raise RuntimeError("empty frame captured")
+
         resp = requests.post(
             ROBOFLOW_BASE_URL,
             params={"api_key": ROBOFLOW_API_KEY},
@@ -211,6 +215,7 @@ class CameraSupervisor:
             "contaminants": contaminants,
             "predictions": predictions,
             "camera_id": cam_id,
+            "has_predictions": bool(predictions),
         }
 
     def _loop(self) -> None:
@@ -261,6 +266,7 @@ atexit.register(camera_manager.cleanup)
 
 camera_supervisor = CameraSupervisor(device_controller, camera_manager)
 atexit.register(camera_supervisor.stop)
+camera_supervisor.start()
 
 oled = OledDisplay(bus=OLED_BUS, addr=OLED_ADDR, rotate=OLED_ROTATE, fps=OLED_FPS)
 
