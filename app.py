@@ -8,7 +8,7 @@ import atexit
 import logging
 import random
 import threading
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 
 import requests
 import cv2  # type: ignore
@@ -45,6 +45,11 @@ try:
 except Exception:
     InferenceHTTPClient = None
 
+try:
+    from inference import InferencePipeline  # type: ignore
+except Exception:
+    InferencePipeline = None
+
 SAMPLE_INTERVAL_SEC = getattr(CFG, "SAMPLE_INTERVAL_SEC", 3)
 DEFAULT_OVERRIDE_SEC = getattr(CFG, "MANUAL_OVERRIDE_SEC", 300)
 
@@ -68,6 +73,9 @@ ROBOFLOW_CLIENT = (
     if InferenceHTTPClient is not None
     else None
 )
+ROBOFLOW_WORKSPACE = os.getenv("ROBOFLOW_WORKSPACE", "kevin-stoob")
+ROBOFLOW_WORKFLOW_ID = os.getenv("ROBOFLOW_WORKFLOW_ID", "mushroom")
+ROBOFLOW_PIPELINE_VIDEO = os.getenv("ROBOFLOW_PIPELINE_VIDEO", "/dev/video0")
 
 TARGET_CLASS = "shitake mushroom"
 ALIEN_CLASS = "button mushroom"
@@ -135,6 +143,72 @@ class SimplePID:
         return output
 
 
+class RoboflowWorkflowPipeline:
+    """Optional Roboflow streaming pipeline to keep workflow detections alive."""
+
+    def __init__(self, video_reference: str | int = ROBOFLOW_PIPELINE_VIDEO, max_fps: int = 10) -> None:
+        self.video_reference = video_reference
+        self.max_fps = max_fps
+        self._pipeline = None
+        self._th: Optional[threading.Thread] = None
+        self._latest: Optional[dict] = None
+        self._lock = threading.Lock()
+
+    def start(self) -> bool:
+        if InferencePipeline is None:
+            return False
+        if self._pipeline is not None:
+            return True
+
+        try:
+            self._pipeline = InferencePipeline.init_with_workflow(
+                api_key=ROBOFLOW_API_KEY,
+                workspace_name=ROBOFLOW_WORKSPACE,
+                workflow_id=ROBOFLOW_WORKFLOW_ID,
+                video_reference=self.video_reference,
+                max_fps=self.max_fps,
+                on_prediction=self._on_prediction,
+            )
+        except Exception as e:
+            log.warning(f"Roboflow workflow pipeline unavailable: {e}")
+            self._pipeline = None
+            return False
+
+        self._th = threading.Thread(target=self._run, name="roboflow-workflow", daemon=True)
+        self._th.start()
+        return True
+
+    def _run(self) -> None:
+        if self._pipeline is None:
+            return
+        try:
+            self._pipeline.start()
+            self._pipeline.join()
+        except Exception as e:
+            log.warning(f"Roboflow workflow pipeline stopped: {e}")
+
+    def _on_prediction(self, result, video_frame) -> None:
+        payload = {"result": result, "ts": time.time()}
+        if video_frame is not None:
+            payload["camera_id"] = getattr(video_frame, "video_reference", 0)
+        with self._lock:
+            self._latest = payload
+
+    def latest(self) -> Optional[dict]:
+        with self._lock:
+            if self._latest is None:
+                return None
+            return dict(self._latest)
+
+    def stop(self) -> None:
+        try:
+            if self._pipeline is not None:
+                self._pipeline.stop()
+                self._pipeline.join(timeout=1)
+        except Exception:
+            pass
+
+
 class CameraSupervisor:
     """Schedule camera detections and track recent results."""
 
@@ -148,16 +222,19 @@ class CameraSupervisor:
             "contaminants": [],
             "has_predictions": False,
         }
+        self.pipeline = RoboflowWorkflowPipeline()
         self._stop_evt = threading.Event()
         self._th = threading.Thread(target=self._loop, name="camera-supervisor", daemon=True)
 
     def start(self) -> None:
+        self.pipeline.start()
         if not self._th.is_alive():
             self._th.start()
 
     def stop(self) -> None:
         self._stop_evt.set()
         self._th.join(timeout=1.0)
+        self.pipeline.stop()
 
     def _capture_frame(self) -> Tuple[int, bytes]:
         for cam_id in self.camera.device_indices:
@@ -167,6 +244,20 @@ class CameraSupervisor:
                 log.debug(f"camera {cam_id} frame failed: {e}")
                 continue
         raise RuntimeError("no camera frame available")
+
+    @staticmethod
+    def _extract_predictions_from_pipeline(result: dict) -> list:
+        if not isinstance(result, dict):
+            return []
+        for key in ("predictions", "results"):
+            preds = result.get(key)
+            if isinstance(preds, list):
+                return preds
+            if isinstance(preds, dict):
+                nested = preds.get("predictions")
+                if isinstance(nested, list):
+                    return nested
+        return []
 
     def _send_to_roboflow(self, frame: bytes) -> dict:
         if not frame:
@@ -178,6 +269,13 @@ class CameraSupervisor:
                 img = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
                 if img is None:
                     raise RuntimeError("camera frame decode failed")
+                infer_workflow = getattr(ROBOFLOW_CLIENT, "infer_from_workflow", None)
+                if callable(infer_workflow):
+                    return infer_workflow(
+                        workflow_id=ROBOFLOW_WORKFLOW_ID,
+                        image=img,
+                        workspace=ROBOFLOW_WORKSPACE,
+                    ) or {}
                 return ROBOFLOW_CLIENT.infer(img, model_id=ROBOFLOW_MODEL_ID) or {}
             except Exception as e:
                 log.warning(f"Roboflow SDK inference failed, falling back to HTTP: {e}")
@@ -199,11 +297,7 @@ class CameraSupervisor:
             return 0.0
         return f / 100.0 if f > 1.0 else f
 
-    def perform_detection(self) -> dict:
-        cam_id, frame = self._capture_frame()
-        data = self._send_to_roboflow(frame)
-        predictions = data.get("predictions") or []
-
+    def _summarize_predictions(self, predictions: list, cam_id: Union[int, str]) -> dict:
         def _class_name(p: dict) -> str:
             return str(p.get("class") or "").strip().lower()
 
@@ -240,6 +334,12 @@ class CameraSupervisor:
             "has_predictions": bool(predictions),
         }
 
+    def perform_detection(self) -> dict:
+        cam_id, frame = self._capture_frame()
+        data = self._send_to_roboflow(frame)
+        predictions = data.get("predictions") or []
+        return self._summarize_predictions(predictions, cam_id)
+
     def _loop(self) -> None:
         while not self._stop_evt.is_set():
             interval = random.uniform(CAMERA_DETECT_MIN_SEC, CAMERA_DETECT_MAX_SEC)
@@ -249,7 +349,19 @@ class CameraSupervisor:
             try:
                 self.controller.set_led(True)
                 time.sleep(CAMERA_LED_WARMUP_SEC)
-                result = self.perform_detection() or {}
+                pipeline_result = self.pipeline.latest()
+                if pipeline_result:
+                    preds = self._extract_predictions_from_pipeline(
+                        pipeline_result.get("result") or {}
+                    )
+                    if preds:
+                        result = self._summarize_predictions(
+                            preds, pipeline_result.get("camera_id", 0)
+                        )
+                    else:
+                        result = self.perform_detection() or {}
+                else:
+                    result = self.perform_detection() or {}
                 self.mushroom_count = max(0, int(result.get("target_count") or 0))
                 self.last_detection_result = result
                 self.last_detection_ts = time.time()
