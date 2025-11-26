@@ -75,7 +75,7 @@ ROBOFLOW_CLIENT = (
 )
 ROBOFLOW_WORKSPACE = os.getenv("ROBOFLOW_WORKSPACE", "kevin-stoob")
 ROBOFLOW_WORKFLOW_ID = os.getenv("ROBOFLOW_WORKFLOW_ID", "mushroom")
-ROBOFLOW_PIPELINE_VIDEO = os.getenv("ROBOFLOW_PIPELINE_VIDEO", "/dev/video0")
+ROBOFLOW_PIPELINE_VIDEO = os.getenv("ROBOFLOW_PIPELINE_VIDEO", "0")
 
 TARGET_CLASS = "shitake mushroom"
 ALIEN_CLASS = "button mushroom"
@@ -147,7 +147,10 @@ class RoboflowWorkflowPipeline:
     """Optional Roboflow streaming pipeline to keep workflow detections alive."""
 
     def __init__(self, video_reference: str | int = ROBOFLOW_PIPELINE_VIDEO, max_fps: int = 10) -> None:
-        self.video_reference = video_reference
+        try:
+            self.video_reference: str | int = int(str(video_reference).strip())
+        except Exception:
+            self.video_reference = video_reference
         self.max_fps = max_fps
         self._pipeline = None
         self._th: Optional[threading.Thread] = None
@@ -168,6 +171,11 @@ class RoboflowWorkflowPipeline:
                 video_reference=self.video_reference,
                 max_fps=self.max_fps,
                 on_prediction=self._on_prediction,
+            )
+            log.info(
+                "Roboflow workflow pipeline initialized for %s (fps=%s)",
+                self.video_reference,
+                self.max_fps,
             )
         except Exception as e:
             log.warning(f"Roboflow workflow pipeline unavailable: {e}")
@@ -249,14 +257,40 @@ class CameraSupervisor:
     def _extract_predictions_from_pipeline(result: dict) -> list:
         if not isinstance(result, dict):
             return []
-        for key in ("predictions", "results"):
-            preds = result.get(key)
-            if isinstance(preds, list):
-                return preds
-            if isinstance(preds, dict):
-                nested = preds.get("predictions")
+
+        def _maybe_list(val):
+            if isinstance(val, list):
+                return val
+            if isinstance(val, dict):
+                nested = val.get("predictions")
                 if isinstance(nested, list):
                     return nested
+            return None
+
+        # Direct predictions
+        direct = _maybe_list(result.get("predictions"))
+        if direct is not None:
+            return direct
+
+        # Nested results payloads
+        results = result.get("results")
+        if isinstance(results, dict):
+            nested = _maybe_list(results)
+            if nested is not None:
+                return nested
+        if isinstance(results, list):
+            for item in results:
+                nested = _maybe_list(item)
+                if nested:
+                    return nested
+
+        # Workflow output container
+        output_image = result.get("output") or result.get("output_image")
+        if isinstance(output_image, dict):
+            nested = _maybe_list(output_image)
+            if nested is not None:
+                return nested
+
         return []
 
     def _send_to_roboflow(self, frame: bytes) -> dict:
