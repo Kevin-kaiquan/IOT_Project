@@ -90,12 +90,17 @@ def _parse_model_id(model_id: str) -> tuple[str, str, str]:
 
 
 ROBOFLOW_MODEL_ID = os.getenv("ROBOFLOW_MODEL_ID", "kevin-stoob/mushroom_demo-gkc1f/2")
+ROBOFLOW_MODEL_URL = os.getenv("ROBOFLOW_MODEL_URL", "mushroom_demo-gkc1f/2").strip("/")
 _model_workspace, _model_slug, _model_version = _parse_model_id(ROBOFLOW_MODEL_ID)
 ROBOFLOW_API_KEY = os.getenv("ROBOFLOW_API_KEY", "OVH73o1hdgSYepnRlv4U")
 ROBOFLOW_WORKSPACE = os.getenv("ROBOFLOW_WORKSPACE", _model_workspace or "kevin-stoob")
 ROBOFLOW_MODEL_VERSION = os.getenv("ROBOFLOW_MODEL_VERSION", _model_version or "2")
-ROBOFLOW_MODEL_PATH = f"{_model_slug}/{ROBOFLOW_MODEL_VERSION}".strip("/")
-ROBOFLOW_BASE_URL = f"https://detect.roboflow.com/{ROBOFLOW_MODEL_PATH}"
+ROBOFLOW_MODEL_PATH = "/".join(
+    part.strip("/")
+    for part in (ROBOFLOW_WORKSPACE if _model_workspace else "", _model_slug, ROBOFLOW_MODEL_VERSION)
+    if part
+)
+ROBOFLOW_BASE_URL = f"https://detect.roboflow.com/{ROBOFLOW_MODEL_URL}"
 ROBOFLOW_CLIENT = (
     InferenceHTTPClient(api_url="https://detect.roboflow.com", api_key=ROBOFLOW_API_KEY)
     if InferenceHTTPClient is not None
@@ -342,34 +347,38 @@ class CameraSupervisor:
             except Exception as e:
                 log.warning(f"Roboflow SDK inference failed, falling back to HTTP: {e}")
 
-        # Multipart JPEG upload
+        # Roboflow detect endpoint (base64 body matches official curl flow)
+        b64 = base64.b64encode(frame)
         resp = requests.post(
             ROBOFLOW_BASE_URL,
-            params={"api_key": ROBOFLOW_API_KEY, "format": "json"},
-            files={"file": ("frame.jpg", frame, "image/jpeg")},
+            params={"api_key": ROBOFLOW_API_KEY, "format": "json", "name": "frame.jpg"},
+            data=b64,
             timeout=12,
         )
         try:
             resp.raise_for_status()
         except Exception as e:
-            raise RuntimeError(f"roboflow http error: {e} | body={resp.text}")
+            raise RuntimeError(f"roboflow base64 http error: {e} | body={resp.text}")
         data = resp.json()
-        # If the multipart path returns no predictions, retry with raw base64 payload
+
+        if data.get("predictions"):
+            return data
+
+        # If no predictions returned, retry with multipart upload to guard against
+        # strict content-type handling on some deployments.
+        alt_resp = requests.post(
+            ROBOFLOW_BASE_URL,
+            params={"api_key": ROBOFLOW_API_KEY, "format": "json", "name": "frame.jpg"},
+            files={"file": ("frame.jpg", frame, "image/jpeg")},
+            timeout=12,
+        )
+        try:
+            alt_resp.raise_for_status()
+        except Exception as e:
+            raise RuntimeError(f"roboflow multipart http error: {e} | body={alt_resp.text}")
+        data = alt_resp.json()
         if not data.get("predictions"):
-            b64 = base64.b64encode(frame)
-            alt_resp = requests.post(
-                ROBOFLOW_BASE_URL,
-                params={"api_key": ROBOFLOW_API_KEY, "format": "json"},
-                data=b64,
-                timeout=12,
-            )
-            try:
-                alt_resp.raise_for_status()
-            except Exception as e:
-                raise RuntimeError(
-                    f"roboflow base64 http error: {e} | body={alt_resp.text}"
-                )
-            data = alt_resp.json()
+            log.warning("Roboflow detect returned no predictions for the current frame")
         return data
 
     @staticmethod
