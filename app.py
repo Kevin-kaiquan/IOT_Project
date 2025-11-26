@@ -5,6 +5,7 @@ import os
 import re
 import sys
 import time
+import base64
 import atexit
 import logging
 import random
@@ -77,19 +78,22 @@ def _parse_model_id(model_id: str) -> tuple[str, str, str]:
         workspace, model = raw.split("/", 1)
 
     version = ""
-    match = re.search(r"-([0-9]+)$", model)
-    if match:
-        version = match.group(1)
-        model = model[: -len(match.group(0))]
+    if "/" in model:
+        model, version = model.rsplit("/", 1)
+    else:
+        match = re.search(r"-([0-9]+)$", model)
+        if match:
+            version = match.group(1)
+            model = model[: -len(match.group(0))]
 
     return workspace, model, version
 
 
-ROBOFLOW_MODEL_ID = os.getenv("ROBOFLOW_MODEL_ID", "kevin-stoob/mushroom_demo-gkc1f-instant-1")
+ROBOFLOW_MODEL_ID = os.getenv("ROBOFLOW_MODEL_ID", "kevin-stoob/mushroom_demo-gkc1f/2")
 _model_workspace, _model_slug, _model_version = _parse_model_id(ROBOFLOW_MODEL_ID)
 ROBOFLOW_API_KEY = os.getenv("ROBOFLOW_API_KEY", "OVH73o1hdgSYepnRlv4U")
 ROBOFLOW_WORKSPACE = os.getenv("ROBOFLOW_WORKSPACE", _model_workspace or "kevin-stoob")
-ROBOFLOW_MODEL_VERSION = os.getenv("ROBOFLOW_MODEL_VERSION", _model_version or "1")
+ROBOFLOW_MODEL_VERSION = os.getenv("ROBOFLOW_MODEL_VERSION", _model_version or "2")
 ROBOFLOW_MODEL_PATH = f"{_model_slug}/{ROBOFLOW_MODEL_VERSION}".strip("/")
 ROBOFLOW_BASE_URL = f"https://detect.roboflow.com/{ROBOFLOW_MODEL_PATH}"
 ROBOFLOW_CLIENT = (
@@ -338,6 +342,7 @@ class CameraSupervisor:
             except Exception as e:
                 log.warning(f"Roboflow SDK inference failed, falling back to HTTP: {e}")
 
+        # Multipart JPEG upload
         resp = requests.post(
             ROBOFLOW_BASE_URL,
             params={"api_key": ROBOFLOW_API_KEY, "format": "json"},
@@ -348,7 +353,24 @@ class CameraSupervisor:
             resp.raise_for_status()
         except Exception as e:
             raise RuntimeError(f"roboflow http error: {e} | body={resp.text}")
-        return resp.json()
+        data = resp.json()
+        # If the multipart path returns no predictions, retry with raw base64 payload
+        if not data.get("predictions"):
+            b64 = base64.b64encode(frame)
+            alt_resp = requests.post(
+                ROBOFLOW_BASE_URL,
+                params={"api_key": ROBOFLOW_API_KEY, "format": "json"},
+                data=b64,
+                timeout=12,
+            )
+            try:
+                alt_resp.raise_for_status()
+            except Exception as e:
+                raise RuntimeError(
+                    f"roboflow base64 http error: {e} | body={alt_resp.text}"
+                )
+            data = alt_resp.json()
+        return data
 
     @staticmethod
     def _normalize_conf(val: float) -> float:
