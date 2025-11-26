@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """Main application entry for environment monitoring and control."""
 import os
+import re
 import sys
 import time
 import atexit
@@ -65,9 +66,21 @@ CAMERA_LED_WARMUP_SEC = getattr(CFG, "CAMERA_LED_WARMUP_SEC", 0.8)
 CAMERA_DETECT_MIN_SEC = getattr(CFG, "CAMERA_DETECT_MIN_SEC", 5.0)
 CAMERA_DETECT_MAX_SEC = getattr(CFG, "CAMERA_DETECT_MAX_SEC", 10.0)
 
+def _normalize_model_path(model_id: str) -> str:
+    raw = (model_id or "").strip().strip("/")
+    if not raw:
+        return ""
+    workspace: str = ""
+    if "/" in raw:
+        workspace, raw = raw.rsplit("/", 1)
+    raw = re.sub(r"-([0-9]+)$", r"/\1", raw)
+    return f"{workspace}/{raw}" if workspace else raw
+
+
 ROBOFLOW_MODEL_ID = os.getenv("ROBOFLOW_MODEL_ID", "kevin-stoob/mushroom_demo-gkc1f-instant-1")
+ROBOFLOW_MODEL_PATH = _normalize_model_path(ROBOFLOW_MODEL_ID)
 ROBOFLOW_API_KEY = os.getenv("ROBOFLOW_API_KEY", "OVH73o1hdgSYepnRlv4U")
-ROBOFLOW_BASE_URL = f"https://detect.roboflow.com/{ROBOFLOW_MODEL_ID}"
+ROBOFLOW_BASE_URL = f"https://detect.roboflow.com/{ROBOFLOW_MODEL_PATH}"
 ROBOFLOW_CLIENT = (
     InferenceHTTPClient(api_url="https://detect.roboflow.com", api_key=ROBOFLOW_API_KEY)
     if InferenceHTTPClient is not None
@@ -299,18 +312,19 @@ class CameraSupervisor:
 
         if ROBOFLOW_CLIENT is not None:
             try:
-                np_img = np.frombuffer(frame, dtype=np.uint8)
-                img = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
-                if img is None:
-                    raise RuntimeError("camera frame decode failed")
                 infer_workflow = getattr(ROBOFLOW_CLIENT, "infer_from_workflow", None)
                 if callable(infer_workflow):
                     return infer_workflow(
                         workflow_id=ROBOFLOW_WORKFLOW_ID,
-                        image=img,
+                        image=frame,
                         workspace=ROBOFLOW_WORKSPACE,
                     ) or {}
-                return ROBOFLOW_CLIENT.infer(img, model_id=ROBOFLOW_MODEL_ID) or {}
+
+                np_img = np.frombuffer(frame, dtype=np.uint8)
+                img = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
+                if img is None:
+                    raise RuntimeError("camera frame decode failed")
+                return ROBOFLOW_CLIENT.infer(img, model_id=ROBOFLOW_MODEL_PATH) or {}
             except Exception as e:
                 log.warning(f"Roboflow SDK inference failed, falling back to HTTP: {e}")
 
@@ -320,7 +334,10 @@ class CameraSupervisor:
             files={"file": ("frame.jpg", frame, "image/jpeg")},
             timeout=12,
         )
-        resp.raise_for_status()
+        try:
+            resp.raise_for_status()
+        except Exception as e:
+            raise RuntimeError(f"roboflow http error: {e} | body={resp.text}")
         return resp.json()
 
     @staticmethod
