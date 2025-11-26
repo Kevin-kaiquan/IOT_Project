@@ -66,27 +66,37 @@ CAMERA_LED_WARMUP_SEC = getattr(CFG, "CAMERA_LED_WARMUP_SEC", 0.8)
 CAMERA_DETECT_MIN_SEC = getattr(CFG, "CAMERA_DETECT_MIN_SEC", 5.0)
 CAMERA_DETECT_MAX_SEC = getattr(CFG, "CAMERA_DETECT_MAX_SEC", 10.0)
 
-def _normalize_model_path(model_id: str) -> str:
+def _parse_model_id(model_id: str) -> tuple[str, str, str]:
     raw = (model_id or "").strip().strip("/")
     if not raw:
-        return ""
-    workspace: str = ""
+        return "", "", ""
+
+    workspace = ""
+    model = raw
     if "/" in raw:
-        workspace, raw = raw.rsplit("/", 1)
-    raw = re.sub(r"-([0-9]+)$", r"/\1", raw)
-    return f"{workspace}/{raw}" if workspace else raw
+        workspace, model = raw.split("/", 1)
+
+    version = ""
+    match = re.search(r"-([0-9]+)$", model)
+    if match:
+        version = match.group(1)
+        model = model[: -len(match.group(0))]
+
+    return workspace, model, version
 
 
 ROBOFLOW_MODEL_ID = os.getenv("ROBOFLOW_MODEL_ID", "kevin-stoob/mushroom_demo-gkc1f-instant-1")
-ROBOFLOW_MODEL_PATH = _normalize_model_path(ROBOFLOW_MODEL_ID)
+_model_workspace, _model_slug, _model_version = _parse_model_id(ROBOFLOW_MODEL_ID)
 ROBOFLOW_API_KEY = os.getenv("ROBOFLOW_API_KEY", "OVH73o1hdgSYepnRlv4U")
+ROBOFLOW_WORKSPACE = os.getenv("ROBOFLOW_WORKSPACE", _model_workspace or "kevin-stoob")
+ROBOFLOW_MODEL_VERSION = os.getenv("ROBOFLOW_MODEL_VERSION", _model_version or "1")
+ROBOFLOW_MODEL_PATH = f"{_model_slug}/{ROBOFLOW_MODEL_VERSION}".strip("/")
 ROBOFLOW_BASE_URL = f"https://detect.roboflow.com/{ROBOFLOW_MODEL_PATH}"
 ROBOFLOW_CLIENT = (
     InferenceHTTPClient(api_url="https://detect.roboflow.com", api_key=ROBOFLOW_API_KEY)
     if InferenceHTTPClient is not None
     else None
 )
-ROBOFLOW_WORKSPACE = os.getenv("ROBOFLOW_WORKSPACE", "kevin-stoob")
 ROBOFLOW_WORKFLOW_ID = os.getenv("ROBOFLOW_WORKFLOW_ID", "mushroom")
 ROBOFLOW_PIPELINE_VIDEO = os.getenv("ROBOFLOW_PIPELINE_VIDEO", "0")
 
@@ -330,7 +340,7 @@ class CameraSupervisor:
 
         resp = requests.post(
             ROBOFLOW_BASE_URL,
-            params={"api_key": ROBOFLOW_API_KEY},
+            params={"api_key": ROBOFLOW_API_KEY, "format": "json"},
             files={"file": ("frame.jpg", frame, "image/jpeg")},
             timeout=12,
         )
