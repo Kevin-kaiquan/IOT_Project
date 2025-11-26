@@ -3,3 +3,4 @@ smbus2>=0.4
 RPi.GPIO>=0.7
 opencv-python>=4.10
 requests>=2.32
+inference-sdk>=0.9.11

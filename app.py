@@ -11,6 +11,8 @@ import threading
 from typing import Optional, Tuple
 
 import requests
+import cv2  # type: ignore
+import numpy as np
 
 from flask import Flask, jsonify, render_template, request
 
@@ -38,6 +40,11 @@ except Exception:
     class _CFG: ...
     CFG = _CFG()
 
+try:
+    from inference_sdk import InferenceHTTPClient
+except Exception:
+    InferenceHTTPClient = None
+
 SAMPLE_INTERVAL_SEC = getattr(CFG, "SAMPLE_INTERVAL_SEC", 3)
 DEFAULT_OVERRIDE_SEC = getattr(CFG, "MANUAL_OVERRIDE_SEC", 300)
 
@@ -56,6 +63,11 @@ CAMERA_DETECT_MAX_SEC = getattr(CFG, "CAMERA_DETECT_MAX_SEC", 10.0)
 ROBOFLOW_MODEL_ID = os.getenv("ROBOFLOW_MODEL_ID", "kevin-stoob/mushroom_demo-gkc1f-instant-1")
 ROBOFLOW_API_KEY = os.getenv("ROBOFLOW_API_KEY", "OVH73o1hdgSYepnRlv4U")
 ROBOFLOW_BASE_URL = f"https://detect.roboflow.com/{ROBOFLOW_MODEL_ID}"
+ROBOFLOW_CLIENT = (
+    InferenceHTTPClient(api_url="https://detect.roboflow.com", api_key=ROBOFLOW_API_KEY)
+    if InferenceHTTPClient is not None
+    else None
+)
 
 TARGET_CLASS = "shitake mushroom"
 ALIEN_CLASS = "button mushroom"
@@ -159,6 +171,16 @@ class CameraSupervisor:
     def _send_to_roboflow(self, frame: bytes) -> dict:
         if not frame:
             raise RuntimeError("empty frame captured")
+
+        if ROBOFLOW_CLIENT is not None:
+            try:
+                np_img = np.frombuffer(frame, dtype=np.uint8)
+                img = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
+                if img is None:
+                    raise RuntimeError("camera frame decode failed")
+                return ROBOFLOW_CLIENT.infer(img, model_id=ROBOFLOW_MODEL_ID) or {}
+            except Exception as e:
+                log.warning(f"Roboflow SDK inference failed, falling back to HTTP: {e}")
 
         resp = requests.post(
             ROBOFLOW_BASE_URL,
