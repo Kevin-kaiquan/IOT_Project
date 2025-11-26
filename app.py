@@ -8,7 +8,9 @@ import atexit
 import logging
 import random
 import threading
-from typing import Optional
+from typing import Optional, Tuple
+
+import requests
 
 from flask import Flask, jsonify, render_template, request
 
@@ -50,6 +52,10 @@ CO2_SAFE_STOP   = getattr(CFG, "CO2_SAFE_STOP", 650.0)
 CAMERA_LED_WARMUP_SEC = getattr(CFG, "CAMERA_LED_WARMUP_SEC", 0.8)
 CAMERA_DETECT_MIN_SEC = getattr(CFG, "CAMERA_DETECT_MIN_SEC", 5.0)
 CAMERA_DETECT_MAX_SEC = getattr(CFG, "CAMERA_DETECT_MAX_SEC", 10.0)
+
+ROBOFLOW_MODEL_ID = os.getenv("ROBOFLOW_MODEL_ID", "kevin-stoob/mushroom_demo-gkc1f-instant-1")
+ROBOFLOW_API_KEY = os.getenv("ROBOFLOW_API_KEY", "OVH73o1hdgSYepnRlv4U")
+ROBOFLOW_BASE_URL = f"https://detect.roboflow.com/{ROBOFLOW_MODEL_ID}"
 
 HUMID_LOW_THRESHOLD  = getattr(CFG, "HUMID_LOW_THRESHOLD", 55.0)
 HUMID_HIGH_THRESHOLD = getattr(CFG, "HUMID_HIGH_THRESHOLD", 65.0)
@@ -117,8 +123,9 @@ class SimplePID:
 class CameraSupervisor:
     """Schedule camera detections and track recent results."""
 
-    def __init__(self, controller: "DeviceController") -> None:
+    def __init__(self, controller: "DeviceController", camera: "CameraManager") -> None:
         self.controller = controller
+        self.camera = camera
         self.mushroom_count = 0
         self.last_detection_ts: Optional[float] = None
         self.last_detection_result: dict = {
@@ -136,17 +143,63 @@ class CameraSupervisor:
         self._stop_evt.set()
         self._th.join(timeout=1.0)
 
+    def _capture_frame(self) -> Tuple[int, bytes]:
+        for cam_id in self.camera.device_indices:
+            try:
+                return cam_id, self.camera.get_frame(cam_id)
+            except Exception as e:
+                log.debug(f"camera {cam_id} frame failed: {e}")
+                continue
+        raise RuntimeError("no camera frame available")
+
+    def _send_to_roboflow(self, frame: bytes) -> dict:
+        resp = requests.post(
+            ROBOFLOW_BASE_URL,
+            params={"api_key": ROBOFLOW_API_KEY},
+            files={"file": ("frame.jpg", frame, "image/jpeg")},
+            timeout=12,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    @staticmethod
+    def _normalize_conf(val: float) -> float:
+        try:
+            f = float(val)
+        except (TypeError, ValueError):
+            return 0.0
+        return f / 100.0 if f > 1.0 else f
+
     def perform_detection(self) -> dict:
-        """Placeholder detection hook that can be replaced with real logic."""
-        mushroom_confidence = round(random.uniform(0.6, 0.98), 2)
-        contaminants = [
-            {"name": "绿霉", "prob": round(random.uniform(0.05, 0.22), 2)},
-            {"name": "黑曲霉", "prob": round(random.uniform(0.0, 0.12), 2)},
+        cam_id, frame = self._capture_frame()
+        data = self._send_to_roboflow(frame)
+        predictions = data.get("predictions") or []
+
+        mush_preds = [
+            p
+            for p in predictions
+            if str(p.get("class") or "").lower().startswith("mushroom")
         ]
+        mush_conf = max(
+            (self._normalize_conf(p.get("confidence")) for p in mush_preds),
+            default=0.0,
+        )
+
+        contaminants = [
+            {
+                "name": p.get("class") or "contaminant",
+                "prob": self._normalize_conf(p.get("confidence")),
+            }
+            for p in predictions
+            if p not in mush_preds
+        ]
+
         return {
-            "count": 1 if mushroom_confidence >= 0.75 else 0,
-            "mushroom_confidence": mushroom_confidence,
+            "count": len(mush_preds),
+            "mushroom_confidence": mush_conf,
             "contaminants": contaminants,
+            "predictions": predictions,
+            "camera_id": cam_id,
         }
 
     def _loop(self) -> None:
@@ -192,11 +245,11 @@ sampler.start()
 
 device_controller = DeviceController(HEATER_PIN, FAN_PIN, LED_PIN)
 
-camera_supervisor = CameraSupervisor(device_controller)
-atexit.register(camera_supervisor.stop)
-
 camera_manager = CameraManager(device_indices=[0, 1])
 atexit.register(camera_manager.cleanup)
+
+camera_supervisor = CameraSupervisor(device_controller, camera_manager)
+atexit.register(camera_supervisor.stop)
 
 oled = OledDisplay(bus=OLED_BUS, addr=OLED_ADDR, rotate=OLED_ROTATE, fps=OLED_FPS)
 
