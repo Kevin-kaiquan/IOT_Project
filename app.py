@@ -348,24 +348,24 @@ class CameraSupervisor:
                 log.warning(f"Roboflow SDK inference failed, falling back to HTTP: {e}")
 
         # Roboflow detect endpoint (raw base64 body matches official curl flow)
-        b64_bytes = base64.b64encode(frame)
-        resp = requests.post(
-            ROBOFLOW_BASE_URL,
-            params={"api_key": ROBOFLOW_API_KEY, "format": "json", "name": "frame.jpg"},
-            data=b64_bytes,
-            timeout=12,
-        )
+        last_error: Optional[Exception] = None
+        b64_body = base64.b64encode(frame).decode("ascii", "ignore")
         try:
+            resp = requests.post(
+                ROBOFLOW_BASE_URL,
+                params={"api_key": ROBOFLOW_API_KEY, "format": "json", "name": "frame.jpg"},
+                data=b64_body,
+                timeout=12,
+            )
             resp.raise_for_status()
+            data = resp.json()
+            if data.get("predictions"):
+                return data
         except Exception as e:
-            raise RuntimeError(f"roboflow base64 http error: {e} | body={resp.text}")
-        data = resp.json()
+            last_error = e
+            log.warning("Roboflow base64 detect failed, retrying with multipart: %s", e)
 
-        if data.get("predictions"):
-            return data
-
-        # If no predictions returned, retry with multipart upload to guard against
-        # strict content-type handling on some deployments.
+        # If base64 fails or returns empty predictions, retry with multipart upload
         alt_resp = requests.post(
             ROBOFLOW_BASE_URL,
             params={"api_key": ROBOFLOW_API_KEY, "format": "json", "name": "frame.jpg"},
@@ -375,9 +375,13 @@ class CameraSupervisor:
         try:
             alt_resp.raise_for_status()
         except Exception as e:
-            raise RuntimeError(f"roboflow multipart http error: {e} | body={alt_resp.text}")
+            raise RuntimeError(
+                f"roboflow multipart http error: {e} | base64_error={last_error} | body={alt_resp.text}"
+            )
         data = alt_resp.json()
-        if not data.get("predictions"):
+        if not data.get("predictions") and last_error is not None:
+            log.warning("Roboflow detect returned no predictions; base64_error=%s", last_error)
+        elif not data.get("predictions"):
             log.warning("Roboflow detect returned no predictions for the current frame")
         return data
 
