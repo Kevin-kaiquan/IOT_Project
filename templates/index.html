@@ -24,6 +24,9 @@
   .metric-alert{color:var(--danger);font-weight:800}
   .bbox.alert{border-color:var(--danger);box-shadow:0 0 16px rgba(255,122,138,.65);background:rgba(45,9,18,.6)}
   .bbox.alert .bbox-label{background:var(--danger)}
+  .toast{position:absolute;left:50%;top:12px;transform:translateX(-50%);padding:10px 14px;border-radius:12px;background:rgba(12,19,38,.95);border:1px solid rgba(255,255,255,.12);color:#e7ecff;font-size:13px;font-weight:700;box-shadow:0 10px 24px rgba(0,0,0,.32);opacity:0;pointer-events:none;transition:opacity .25s ease,transform .25s ease}
+  .toast.show{opacity:1;transform:translate(-50%,0)}
+  .toast.danger{background:linear-gradient(135deg,rgba(255,122,138,.16),rgba(45,9,18,.8));border-color:rgba(255,122,138,.7);color:#fff}
   .row{display:flex;align-items:center;gap:8px}
   .spread{justify-content:space-between}
   .value{font-size:34px;font-weight:800;margin:4px 0}
@@ -187,6 +190,9 @@ const co2Data = []; const t1Data=[]; const t2Data=[]; const rhData=[]; const lig
 const bboxDiffEl = document.getElementById('bboxDiff');
 const bboxEl = document.getElementById('bbox');
 const bboxLabelEl = bboxEl ? bboxEl.querySelector('.bbox-label') : null;
+const detectionToast = document.createElement('div');
+detectionToast.className = 'toast';
+bboxEl?.appendChild(detectionToast);
 const idealSummaryEl = document.getElementById('idealSummary');
 const cameraFeedEl = document.getElementById('cameraFeed');
 const cameraStatusEl = document.getElementById('cameraStatus');
@@ -199,8 +205,13 @@ const targetQuickEl = document.getElementById('targetQuick');
 const cameraOrder = [0,1];
 const targetLabel = 'shiitake';
 const dangerLabels = ['mold','fly agaric'];
+const targetThreshold = 0.55;
+const dangerThreshold = 0.4;
+const toastHideMs = 2600;
 let latestDetection = {};
 let lastCameraUrl = null;
+let toastTimer = null;
+let lastToastKey = '';
 const controlButtons = {};
 const overrideBadge = document.getElementById('overrideBadge');
 
@@ -296,9 +307,9 @@ function updateBoundingBox(now, detection={}){
   const detectionProb = typeof detection.probability === 'number'
     ? detection.probability
     : (typeof detection.mushroom_confidence === 'number' ? detection.mushroom_confidence : 0);
-  const hasDetection = !!detection.detected || (Array.isArray(detection.predictions) && detection.predictions.length>0) || detectionProb>0;
-  const isDanger = hasDetection && dangerLabels.includes(detectionLabel);
-  const isTarget = hasDetection && detectionLabel === targetLabel;
+  const isDanger = dangerLabels.includes(detectionLabel) && detectionProb >= dangerThreshold;
+  const isTarget = detectionLabel === targetLabel && detectionProb >= targetThreshold;
+  const hasDetection = isDanger || isTarget;
 
   if(!hasDetection){
     if(bboxEl){
@@ -335,9 +346,7 @@ function updateBoundingBox(now, detection={}){
     lines.push('<span class="bbox-line">Isolate and remove contaminants immediately.</span>');
   }else{
     const displayLabel = detection.label || 'Target';
-    const header = isTarget
-      ? `${displayLabel} confidence ${formatPercent(detectionProb)}`
-      : `Detected ${displayLabel} (${formatPercent(detectionProb)})`;
+    const header = `${displayLabel} confidence ${formatPercent(detectionProb)}`;
     lines.push(`<span class="bbox-line">${header}</span>`);
 
     metrics.forEach(m=>{
@@ -383,10 +392,10 @@ function renderDetection(cameraData={}){
   const mushProb = typeof detection.mushroom_confidence === 'number'
     ? detection.mushroom_confidence
     : (typeof detection.probability === 'number' ? detection.probability : (typeof detection.confidence === 'number' ? detection.confidence : 0));
-  const hasDetection = !!detection.detected || (Array.isArray(detection.predictions) && detection.predictions.length>0) || mushProb>0;
-  const isDanger = dangerLabels.includes(label);
-  const isTarget = label === targetLabel;
-  const displayLabel = detection.label || 'Target';
+  const isDanger = dangerLabels.includes(label) && mushProb >= dangerThreshold;
+  const isTarget = label === targetLabel && mushProb >= targetThreshold;
+  const hasDetection = isDanger || isTarget;
+  const displayLabel = detection.label || '';
 
   if(mushroomProbEl) mushroomProbEl.textContent = hasDetection ? (isDanger ? 'Danger' : formatPercent(mushProb)) : '--';
   if(mushroomProbBarEl) setProgressBar(mushroomProbBarEl, hasDetection ? mushProb : 0, isDanger);
@@ -419,19 +428,47 @@ function renderDetection(cameraData={}){
 
   if(growthInfoEl){
     if(isDanger){
-      growthInfoEl.classList.add('active');
-      growthInfoEl.innerHTML = `Hazard detected: ${displayLabel || 'unknown'} · enter alert mode`;
-    }else if(isTarget && mushProb >= 0.8){
-      growthInfoEl.classList.add('active');
-      growthInfoEl.innerHTML = `${displayLabel} confidence ${formatPercent(mushProb)}. Keep temperature ${IDEAL.temp_range || `${formatNumber(IDEAL.temp_c,1)}°C`}, humidity ${IDEAL.humidity_range || `${formatNumber(IDEAL.humidity,1)}%RH`}, CO₂ ${IDEAL.co2_range || `${formatNumber(IDEAL.co2_ppm,0)} ppm`}, light ${IDEAL.light_range || `${formatNumber(IDEAL.light_lux,0)} lux`}.`;
-    }else if(hasDetection){
       growthInfoEl.classList.remove('active');
-      growthInfoEl.textContent = `${displayLabel} confidence below 0.8; waiting for a clearer frame to show growth guidance…`;
+      growthInfoEl.textContent = `Hazard detected: ${displayLabel || 'unknown'} · evacuate and clean.`;
+    }else if(isTarget){
+      growthInfoEl.classList.add('active');
+      growthInfoEl.innerHTML = `${displayLabel || 'shiitake'} confidence ${formatPercent(mushProb)}. Keep temperature ${IDEAL.temp_range || `${formatNumber(IDEAL.temp_c,1)}°C`}, humidity ${IDEAL.humidity_range || `${formatNumber(IDEAL.humidity,1)}%RH`}, CO₂ ${IDEAL.co2_range || `${formatNumber(IDEAL.co2_ppm,0)} ppm`}, light ${IDEAL.light_range || `${formatNumber(IDEAL.light_lux,0)} lux`}.`;
     }else{
       growthInfoEl.classList.remove('active');
-      growthInfoEl.textContent = 'Waiting for detection before showing growth guidance…';
+      growthInfoEl.textContent = 'Waiting for shiitake detection before showing growth guidance…';
     }
   }
+
+  const toastKey = hasDetection ? `${label}-${Math.round(mushProb*100)}` : '';
+  if(hasDetection){
+    const msg = isDanger
+      ? `Hazard: ${displayLabel || 'unknown'} (${formatPercent(mushProb)})`
+      : `${displayLabel || 'shiitake'} ${formatPercent(mushProb)}`;
+    triggerToast(msg, isDanger, toastKey);
+  }else if(lastToastKey){
+    scheduleToastHide();
+  }
+}
+
+function triggerToast(message, danger=false, key=''){
+  if(!detectionToast) return;
+  if(key && key === lastToastKey){
+    scheduleToastHide();
+    return;
+  }
+  lastToastKey = key;
+  detectionToast.textContent = message;
+  detectionToast.classList.toggle('danger', !!danger);
+  detectionToast.classList.add('show');
+  scheduleToastHide();
+}
+
+function scheduleToastHide(){
+  if(toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(()=>{
+    detectionToast.classList.remove('show');
+    lastToastKey = '';
+  }, toastHideMs);
 }
 
 // --- camera preview ---

@@ -51,6 +51,8 @@ CO2_SAFE_STOP   = getattr(CFG, "CO2_SAFE_STOP", 650.0)
 CAMERA_LED_WARMUP_SEC = getattr(CFG, "CAMERA_LED_WARMUP_SEC", 0.8)
 CAMERA_DETECT_MIN_SEC = getattr(CFG, "CAMERA_DETECT_MIN_SEC", 5.0)
 CAMERA_DETECT_MAX_SEC = getattr(CFG, "CAMERA_DETECT_MAX_SEC", 10.0)
+TARGET_CONFIDENCE_MIN = getattr(CFG, "TARGET_CONFIDENCE_MIN", 0.55)
+DANGER_CONFIDENCE_MIN = getattr(CFG, "DANGER_CONFIDENCE_MIN", 0.4)
 
 HUMID_LOW_THRESHOLD  = getattr(CFG, "HUMID_LOW_THRESHOLD", 55.0)
 HUMID_HIGH_THRESHOLD = getattr(CFG, "HUMID_HIGH_THRESHOLD", 65.0)
@@ -190,6 +192,10 @@ class CameraSupervisor:
         danger_labels = {"mold", "fly agaric"}
 
         mush_conf = 0.0
+        top_prediction = predictions[0] if predictions else None
+        top_label = str((top_prediction or {}).get("class") or data.get("label") or "").lower()
+        top_prob = self._normalize_conf((top_prediction or {}).get("confidence") or data.get("probability") or 0.0)
+
         for p in predictions:
             label = str(p.get("class") or "").lower()
             if label == target_label:
@@ -202,23 +208,26 @@ class CameraSupervisor:
             }
             for p in predictions
             if str(p.get("class") or "").lower() in danger_labels
+            and self._normalize_conf(p.get("confidence")) >= DANGER_CONFIDENCE_MIN
         ]
 
-        has_prediction = bool(predictions)
-        detection_label = str(data.get("label") or "").lower() if has_prediction else ""
-        detection_prob = self._normalize_conf(data.get("probability") or 0.0) if has_prediction else 0.0
-        count = 1 if detection_label == target_label and detection_prob >= 0.6 else 0
+        has_target = top_label == target_label and top_prob >= TARGET_CONFIDENCE_MIN
+        has_danger = top_label in danger_labels and top_prob >= DANGER_CONFIDENCE_MIN
+        detection_label = top_label if (has_target or has_danger) else ""
+        detection_prob = top_prob if (has_target or has_danger) else 0.0
+        has_prediction = has_target or has_danger
+        count = 1 if has_target else 0
 
         return {
             "count": count,
-            "mushroom_confidence": mush_conf,
+            "mushroom_confidence": mush_conf if has_target else 0.0,
             "contaminants": contaminants,
             "predictions": predictions,
             "label": detection_label,
             "probability": detection_prob,
             "camera_id": cam_id,
             "detected": has_prediction,
-            "top_prediction": predictions[0] if predictions else None,
+            "top_prediction": top_prediction if has_prediction else None,
         }
 
     def _loop(self) -> None:
