@@ -347,12 +347,12 @@ class CameraSupervisor:
             except Exception as e:
                 log.warning(f"Roboflow SDK inference failed, falling back to HTTP: {e}")
 
-        # Roboflow detect endpoint (base64 body matches official curl flow)
-        b64 = base64.b64encode(frame).decode("ascii", errors="ignore")
+        # Roboflow detect endpoint (raw base64 body matches official curl flow)
+        b64_bytes = base64.b64encode(frame)
         resp = requests.post(
             ROBOFLOW_BASE_URL,
             params={"api_key": ROBOFLOW_API_KEY, "format": "json", "name": "frame.jpg"},
-            data={"image": b64},
+            data=b64_bytes,
             timeout=12,
         )
         try:
