@@ -349,12 +349,15 @@ class CameraSupervisor:
 
         # Roboflow detect endpoint (raw base64 body matches official curl flow)
         last_error: Optional[Exception] = None
-        b64_body = base64.b64encode(frame).decode("ascii", "ignore")
+        b64_body = base64.b64encode(frame).decode("utf-8", "ignore")
+
+        # Try the documented raw base64 body
         try:
             resp = requests.post(
                 ROBOFLOW_BASE_URL,
                 params={"api_key": ROBOFLOW_API_KEY, "format": "json", "name": "frame.jpg"},
                 data=b64_body,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
                 timeout=12,
             )
             resp.raise_for_status()
@@ -363,7 +366,24 @@ class CameraSupervisor:
                 return data
         except Exception as e:
             last_error = e
-            log.warning("Roboflow base64 detect failed, retrying with multipart: %s", e)
+            log.warning("Roboflow base64 detect failed, retrying with form payload: %s", e)
+
+        # Try base64 via the explicit "image" form field the docs mention
+        try:
+            form_resp = requests.post(
+                ROBOFLOW_BASE_URL,
+                params={"api_key": ROBOFLOW_API_KEY, "format": "json", "name": "frame.jpg"},
+                data={"image": b64_body},
+                timeout=12,
+            )
+            form_resp.raise_for_status()
+            form_data = form_resp.json()
+            if form_data.get("predictions"):
+                return form_data
+            last_error = last_error or Exception("no predictions from form base64 upload")
+        except Exception as e:
+            last_error = e
+            log.warning("Roboflow form-base64 detect failed, retrying with multipart: %s", e)
 
         # If base64 fails or returns empty predictions, retry with multipart upload
         alt_resp = requests.post(
@@ -380,9 +400,9 @@ class CameraSupervisor:
             )
         data = alt_resp.json()
         if not data.get("predictions") and last_error is not None:
-            log.warning("Roboflow detect returned no predictions; base64_error=%s", last_error)
+            log.warning("Roboflow detect returned no predictions; base64_error=%s | body=%s", last_error, data)
         elif not data.get("predictions"):
-            log.warning("Roboflow detect returned no predictions for the current frame")
+            log.warning("Roboflow detect returned no predictions for the current frame; body=%s", data)
         return data
 
     @staticmethod
