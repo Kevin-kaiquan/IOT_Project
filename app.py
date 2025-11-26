@@ -204,8 +204,9 @@ class CameraSupervisor:
             if str(p.get("class") or "").lower() in danger_labels
         ]
 
-        detection_label = str(data.get("label") or "unknown").lower()
-        detection_prob = self._normalize_conf(data.get("probability") or 0.0)
+        has_prediction = bool(predictions)
+        detection_label = str(data.get("label") or "").lower() if has_prediction else ""
+        detection_prob = self._normalize_conf(data.get("probability") or 0.0) if has_prediction else 0.0
         count = 1 if detection_label == target_label and detection_prob >= 0.6 else 0
 
         return {
@@ -216,6 +217,8 @@ class CameraSupervisor:
             "label": detection_label,
             "probability": detection_prob,
             "camera_id": cam_id,
+            "detected": has_prediction,
+            "top_prediction": predictions[0] if predictions else None,
         }
 
     def _loop(self) -> None:
