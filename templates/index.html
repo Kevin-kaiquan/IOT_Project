@@ -364,17 +364,14 @@ function updateBoundingBox(now, detection={}){
     {label:'光照', value: light, ideal:{value: IDEAL.light_lux, range: IDEAL.light_range}, unit:'lux', tolerance:25},
   ];
 
-  const lines = [];
+  let lines = [];
 
   if(isDanger){
     const pct = formatPercent(detectionProb);
     lines.push(`<span class="bbox-line metric-alert">危险污染: ${detectionLabel || '未知'} (${pct})</span>`);
     lines.push('<span class="bbox-line">请立即隔离、清理现场</span>');
-  }else{
-    const header = isTarget
-      ? `Shiitake 置信度 ${formatPercent(detectionProb || detection.mushroom_confidence)}`
-      : '等待清晰画面…';
-    lines.push(`<span class="bbox-line">${header}</span>`);
+  }else if(isTarget){
+    lines.push(`<span class="bbox-line">Shiitake 置信度 ${formatPercent(detectionProb || detection.mushroom_confidence)}</span>`);
 
     metrics.forEach(m=>{
       const inRange = valueInRange(m.value, m.ideal, m.tolerance);
@@ -386,12 +383,20 @@ function updateBoundingBox(now, detection={}){
   }
 
   if(bboxDiffEl){
-    bboxDiffEl.innerHTML = lines.join('');
+    if(lines.length){
+      bboxDiffEl.innerHTML = lines.join('');
+    }else{
+      bboxDiffEl.textContent = '等待清晰画面…';
+    }
   }
 
   latestBBoxLines = lines;
   if(infoModalEl && infoModalEl.classList.contains('open')){
-    renderInfoModal(lines, latestBBoxDanger);
+    if(lines.length){
+      renderInfoModal(lines, latestBBoxDanger);
+    }else{
+      toggleInfoModal(false);
+    }
   }else if(isDanger && infoModalEl && !infoModalEl.classList.contains('open')){
     renderInfoModal(lines, true);
     toggleInfoModal(true);
