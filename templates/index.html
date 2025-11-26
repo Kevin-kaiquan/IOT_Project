@@ -17,13 +17,14 @@
   .camera-frame{position:relative;border-radius:12px;overflow:hidden;aspect-ratio:1/1;min-height:240px;background:radial-gradient(circle at 30% 40%,rgba(122,162,255,.12),transparent 35%),
     radial-gradient(circle at 70% 60%,rgba(122,162,255,.08),transparent 40%),#080c19;border:1px solid rgba(255,255,255,.06)}
   .camera-feed{width:100%;height:100%;object-fit:cover;display:block;background:#050814}
-  .bbox{position:absolute;inset:20% 18%;border:2px solid var(--accent);border-radius:10px;box-shadow:0 0 12px rgba(122,162,255,.45);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;pointer-events:none;padding:10px 12px;background:rgba(8,12,25,.55)}
+  .bbox{position:absolute;inset:20% 18%;border:2px solid var(--accent);border-radius:10px;box-shadow:0 0 12px rgba(122,162,255,.45);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;pointer-events:auto;padding:10px 12px;background:rgba(8,12,25,.55);cursor:pointer;transition:transform .15s ease,box-shadow .15s ease}
   .bbox-label{padding:4px 10px;border-radius:999px;background:var(--accent);color:#fff;font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:.5px}
   .bbox-diff{font-size:13px;color:var(--ink);text-align:center;max-width:96%;line-height:1.4;background:rgba(8,12,25,.7);padding:6px 10px;border-radius:10px;border:1px solid rgba(122,162,255,.35);display:flex;flex-direction:column;gap:4px}
   .bbox-line{display:block}
   .metric-alert{color:var(--danger);font-weight:800}
   .bbox.alert{border-color:var(--danger);box-shadow:0 0 16px rgba(255,122,138,.65);background:rgba(45,9,18,.6)}
   .bbox.alert .bbox-label{background:var(--danger)}
+  .bbox:active{transform:scale(.98);box-shadow:0 0 18px rgba(122,162,255,.5)}
   .row{display:flex;align-items:center;gap:8px}
   .spread{justify-content:space-between}
   .value{font-size:34px;font-weight:800;margin:4px 0}
@@ -63,6 +64,16 @@
   .target-quick{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px}
   .target-chip{padding:8px 10px;border-radius:10px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.05);font-size:12px;color:#b6c5f3;line-height:1.4}
   .target-chip strong{display:block;color:#e7ecff;margin-bottom:2px}
+  .modal-backdrop{position:fixed;inset:0;background:rgba(7,10,20,.65);backdrop-filter:blur(10px);display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity .25s ease;z-index:20}
+  .modal-backdrop.open{opacity:1;pointer-events:auto}
+  .modal-card{width:min(520px,92vw);background:linear-gradient(160deg,rgba(26,36,68,.95),rgba(15,23,48,.94));border-radius:18px;padding:18px;box-shadow:0 20px 60px rgba(0,0,0,.55),0 0 0 1px rgba(255,255,255,.04);border:1px solid rgba(122,162,255,.15)}
+  .modal-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px}
+  .modal-title{font-weight:800;color:#fff;font-size:16px}
+  .modal-close{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.08);color:#cfe0ff;border-radius:12px;padding:6px 10px;font-weight:700;cursor:pointer}
+  .modal-body{display:flex;flex-direction:column;gap:10px;color:#d9e3ff;font-size:14px;line-height:1.5}
+  .modal-lines{display:flex;flex-direction:column;gap:6px;background:rgba(8,12,25,.65);border:1px solid rgba(122,162,255,.22);padding:10px;border-radius:12px}
+  .modal-chip{align-self:flex-start;padding:6px 12px;border-radius:999px;background:rgba(122,162,255,.2);border:1px solid rgba(122,162,255,.4);color:#fff;font-weight:700;font-size:12px;letter-spacing:.4px}
+  .modal-chip.danger{background:rgba(255,122,138,.2);border-color:rgba(255,122,138,.55)}
 </style>
 </head>
 <body>
@@ -175,6 +186,21 @@
   </div>
 </div>
 
+<div class="modal-backdrop" id="infoModal">
+  <div class="modal-card">
+    <div class="modal-head">
+      <div class="row" style="gap:8px;align-items:center">
+        <div class="modal-title" id="infoModalTitle">环境信息</div>
+      </div>
+      <button class="modal-close" type="button" id="infoModalClose">Close</button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-chip" id="infoModalBadge">实时</div>
+      <div class="modal-lines" id="infoModalBody"></div>
+    </div>
+  </div>
+</div>
+
 <script>
 const SAMPLE_INTERVAL = {{ sample_interval|tojson }};
 const IDEAL = {{ ideal_environment|tojson }};
@@ -200,15 +226,41 @@ const cameraOrder = [0,1];
 const targetLabel = 'shiitake';
 const dangerLabels = ['mold','fly agaric'];
 let latestDetection = {};
+let latestBBoxLines = [];
+let latestBBoxDanger = false;
 let lastCameraUrl = null;
 const controlButtons = {};
 const overrideBadge = document.getElementById('overrideBadge');
+const infoModalEl = document.getElementById('infoModal');
+const infoModalTitle = document.getElementById('infoModalTitle');
+const infoModalBody = document.getElementById('infoModalBody');
+const infoModalBadge = document.getElementById('infoModalBadge');
+const infoModalClose = document.getElementById('infoModalClose');
 
 ['heater','fan','led','atomizer'].forEach(name=>{
   const el = document.getElementById(`btn-${name}`);
   if(!el) return;
   controlButtons[name] = el;
   el.addEventListener('click', ()=>toggleDevice(name));
+});
+
+if(infoModalClose){
+  infoModalClose.addEventListener('click', ()=>toggleInfoModal(false));
+}
+if(infoModalEl){
+  infoModalEl.addEventListener('click', (e)=>{
+    if(e.target === infoModalEl) toggleInfoModal(false);
+  });
+}
+if(bboxEl){
+  bboxEl.addEventListener('click', ()=>{
+    if(!latestBBoxLines.length) return;
+    renderInfoModal(latestBBoxLines, latestBBoxDanger);
+    toggleInfoModal(true);
+  });
+}
+document.addEventListener('keydown', (e)=>{
+  if(e.key === 'Escape') toggleInfoModal(false);
 });
 
 function formatNumber(v, digits=1){
@@ -296,6 +348,7 @@ function updateBoundingBox(now, detection={}){
   const detectionProb = typeof detection.probability === 'number' ? detection.probability : 0;
   const isDanger = dangerLabels.includes(detectionLabel);
   const isTarget = detectionLabel === targetLabel;
+  latestBBoxDanger = isDanger;
 
   if(bboxEl){
     bboxEl.classList.toggle('alert', isDanger);
@@ -335,6 +388,27 @@ function updateBoundingBox(now, detection={}){
   if(bboxDiffEl){
     bboxDiffEl.innerHTML = lines.join('');
   }
+
+  latestBBoxLines = lines;
+  if(infoModalEl && infoModalEl.classList.contains('open')){
+    renderInfoModal(lines, latestBBoxDanger);
+  }else if(isDanger && infoModalEl && !infoModalEl.classList.contains('open')){
+    renderInfoModal(lines, true);
+    toggleInfoModal(true);
+  }
+}
+
+function renderInfoModal(lines=[], isDanger=false){
+  if(!infoModalEl || !infoModalBody || !infoModalBadge || !infoModalTitle) return;
+  infoModalTitle.textContent = isDanger ? '风险警告' : '环境信息';
+  infoModalBadge.textContent = isDanger ? '警报' : '实时';
+  infoModalBadge.classList.toggle('danger', isDanger);
+  infoModalBody.innerHTML = (lines && lines.length) ? lines.join('') : '<span>暂无信息…</span>';
+}
+
+function toggleInfoModal(show){
+  if(!infoModalEl) return;
+  infoModalEl.classList.toggle('open', !!show);
 }
 
 function renderTargetQuick(){

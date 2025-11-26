@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import cv2  # type: ignore
 import numpy as np
@@ -23,19 +23,72 @@ log = logging.getLogger(__name__)
 class TeachableMachineDetector:
     """Lightweight detector for Teachable Machine image models."""
 
-    def __init__(self, model_dir: str = "model") -> None:
-        self.model_path = os.path.join(model_dir, "model.tflite")
-        self.labels_path = os.path.join(model_dir, "labels.txt")
+    def __init__(
+        self,
+        model_dir: str = "model",
+        *,
+        model_filename: Optional[str] = None,
+        labels_filename: Optional[str] = None,
+    ) -> None:
+        self.model_dir = model_dir
+        self.model_path = self._resolve_model_path(model_filename)
+        self.labels_path = self._resolve_labels_path(labels_filename)
         self.labels: List[str] = self._load_labels()
         self.interpreter = self._load_interpreter()
         self.input_details = self.interpreter.get_input_details() if self.interpreter else []
         self.output_details = self.interpreter.get_output_details() if self.interpreter else []
         self.height, self.width = self._infer_input_size()
 
+    def _resolve_model_path(self, preferred: Optional[str]) -> str:
+        """Locate a TFLite model inside the model directory."""
+        candidates: List[str] = []
+        if preferred:
+            candidates.append(os.path.join(self.model_dir, preferred))
+        candidates.append(os.path.join(self.model_dir, "model.tflite"))
+
+        if os.path.isdir(self.model_dir):
+            for name in sorted(os.listdir(self.model_dir)):
+                if name.lower().endswith(".tflite"):
+                    candidates.append(os.path.join(self.model_dir, name))
+
+        for path in candidates:
+            if os.path.exists(path):
+                return path
+
+        # Fall back to the first candidate; loading will warn later.
+        return candidates[0]
+
+    def _resolve_labels_path(self, preferred: Optional[str]) -> str:
+        """Locate a labels file inside the model directory."""
+        candidates: List[str] = []
+        if preferred:
+            candidates.append(os.path.join(self.model_dir, preferred))
+        candidates.append(os.path.join(self.model_dir, "labels.txt"))
+
+        if os.path.isdir(self.model_dir):
+            for name in sorted(os.listdir(self.model_dir)):
+                lower = name.lower()
+                if lower.endswith(".txt") and "label" in lower:
+                    candidates.append(os.path.join(self.model_dir, name))
+
+        for path in candidates:
+            if os.path.exists(path):
+                return path
+
+        return candidates[0]
+
     def _load_labels(self) -> List[str]:
         try:
             with open(self.labels_path, "r", encoding="utf-8") as f:
-                return [line.strip() for line in f if line.strip()]
+                labels: List[str] = []
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    # Support formats like "0 class" or raw label text.
+                    parts = line.split(maxsplit=1)
+                    labels.append(parts[-1])
+                return labels
         except FileNotFoundError:
             log.warning("labels.txt not found in %s", os.path.dirname(self.labels_path))
             return []
