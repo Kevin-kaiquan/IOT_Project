@@ -2,30 +2,44 @@
 from __future__ import annotations
 
 import threading
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Union
 
 import cv2  # type: ignore
+
+CameraID = Union[int, str]
 
 
 class CameraManager:
     def __init__(
         self,
-        device_indices: Iterable[int],
+        device_indices: Iterable[CameraID],
         *,
         width: int = 640,
         height: int = 480,
     ) -> None:
-        self.device_indices: List[int] = sorted(set(int(i) for i in device_indices))
+        seen: List[CameraID] = []
+        for item in device_indices:
+            if item in seen:
+                continue
+            seen.append(item)
+        self.device_indices: List[CameraID] = seen or [0]
         self.width = width
         self.height = height
-        self._captures: Dict[int, cv2.VideoCapture] = {}
+        self._captures: Dict[CameraID, cv2.VideoCapture] = {}
         self._lock = threading.Lock()
 
-    def _open_capture(self, cam_id: int) -> cv2.VideoCapture | None:
-        cap = cv2.VideoCapture(cam_id)
+    def _open_capture(self, cam_id: CameraID) -> cv2.VideoCapture | None:
+        backend = cv2.CAP_V4L2 if hasattr(cv2, "CAP_V4L2") else 0
+        cap = cv2.VideoCapture(cam_id, backend)
         if not cap.isOpened():
             cap.release()
-            return None
+            if cam_id == 0:
+                cap = cv2.VideoCapture("/dev/video0", backend)
+                if not cap.isOpened():
+                    cap.release()
+                    return None
+            else:
+                return None
 
         if self.width:
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, float(self.width))
@@ -33,7 +47,7 @@ class CameraManager:
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, float(self.height))
         return cap
 
-    def _get_capture(self, cam_id: int) -> cv2.VideoCapture | None:
+    def _get_capture(self, cam_id: CameraID) -> cv2.VideoCapture | None:
         cap = self._captures.get(cam_id)
         if cap is None or not cap.isOpened():
             cap = self._open_capture(cam_id)
@@ -41,7 +55,7 @@ class CameraManager:
                 self._captures[cam_id] = cap
         return cap
 
-    def get_frame(self, cam_id: int) -> bytes:
+    def get_frame(self, cam_id: CameraID) -> bytes:
         if cam_id not in self.device_indices:
             raise KeyError(f"Camera {cam_id} not allowed")
 

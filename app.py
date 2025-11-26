@@ -261,7 +261,7 @@ sampler.start()
 
 device_controller = DeviceController(HEATER_PIN, FAN_PIN, LED_PIN)
 
-camera_manager = CameraManager(device_indices=[0, 1])
+camera_manager = CameraManager(device_indices=[0])
 atexit.register(camera_manager.cleanup)
 
 camera_supervisor = CameraSupervisor(device_controller, camera_manager)
