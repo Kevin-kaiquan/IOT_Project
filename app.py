@@ -242,7 +242,8 @@ class CameraSupervisor:
                 result = self.perform_detection() or {}
                 self.mushroom_count = max(0, int(result.get("count") or 0))
                 self.last_detection_result = result
-                self.last_detection_ts = time.time()
+                if result.get("detected"):
+                    self.last_detection_ts = time.time()
             except Exception as e:
                 log.warning(f"camera detection loop error: {e}")
             finally:

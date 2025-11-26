@@ -18,6 +18,7 @@
     radial-gradient(circle at 70% 60%,rgba(122,162,255,.08),transparent 40%),#080c19;border:1px solid rgba(255,255,255,.06)}
   .camera-feed{width:100%;height:100%;object-fit:cover;display:block;background:#050814}
   .bbox{position:absolute;inset:20% 18%;border:2px solid var(--accent);border-radius:10px;box-shadow:0 0 12px rgba(122,162,255,.45);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;pointer-events:none;padding:10px 12px;background:rgba(8,12,25,.55)}
+  .bbox.inactive{opacity:0;}
   .bbox-label{padding:4px 10px;border-radius:999px;background:var(--accent);color:#fff;font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:.5px}
   .bbox-diff{font-size:13px;color:var(--ink);text-align:center;max-width:96%;line-height:1.4;background:rgba(8,12,25,.7);padding:6px 10px;border-radius:10px;border:1px solid rgba(122,162,255,.35);display:flex;flex-direction:column;gap:4px;min-height:40px}
   .bbox-line{display:block}
@@ -307,24 +308,27 @@ function updateBoundingBox(now, detection={}){
   const detectionProb = typeof detection.probability === 'number'
     ? detection.probability
     : (typeof detection.mushroom_confidence === 'number' ? detection.mushroom_confidence : 0);
-  const isDanger = dangerLabels.includes(detectionLabel) && detectionProb >= dangerThreshold;
-  const isTarget = detectionLabel === targetLabel && detectionProb >= targetThreshold;
+  const detected = !!detection.detected;
+  const isDanger = detected && dangerLabels.includes(detectionLabel) && detectionProb >= dangerThreshold;
+  const isTarget = detected && detectionLabel === targetLabel && detectionProb >= targetThreshold;
   const hasDetection = isDanger || isTarget;
 
   if(!hasDetection){
     if(bboxEl){
       bboxEl.classList.remove('alert');
+      bboxEl.classList.add('inactive');
     }
     if(bboxLabelEl){
-      bboxLabelEl.textContent = 'Target';
+      bboxLabelEl.textContent = 'No detection';
     }
     if(bboxDiffEl){
-      bboxDiffEl.textContent = 'Waiting for detection…';
+      bboxDiffEl.textContent = 'Waiting for a clear shiitake frame…';
     }
     return;
   }
 
   if(bboxEl){
+    bboxEl.classList.remove('inactive');
     bboxEl.classList.toggle('alert', isDanger);
   }
   if(bboxLabelEl){
@@ -388,12 +392,13 @@ function setProgressBar(el, value, danger=false){
 function renderDetection(cameraData={}){
   const detection = cameraData.detection || {};
   latestDetection = detection;
+  const detected = !!detection.detected;
   const label = (detection.label || '').toLowerCase();
-  const mushProb = typeof detection.mushroom_confidence === 'number'
+  const mushProb = detected && typeof detection.mushroom_confidence === 'number'
     ? detection.mushroom_confidence
-    : (typeof detection.probability === 'number' ? detection.probability : (typeof detection.confidence === 'number' ? detection.confidence : 0));
-  const isDanger = dangerLabels.includes(label) && mushProb >= dangerThreshold;
-  const isTarget = label === targetLabel && mushProb >= targetThreshold;
+    : (detected && typeof detection.probability === 'number' ? detection.probability : 0);
+  const isDanger = detected && dangerLabels.includes(label) && mushProb >= dangerThreshold;
+  const isTarget = detected && label === targetLabel && mushProb >= targetThreshold;
   const hasDetection = isDanger || isTarget;
   const displayLabel = detection.label || '';
 
