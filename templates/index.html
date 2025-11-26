@@ -17,9 +17,13 @@
   .camera-frame{position:relative;border-radius:12px;overflow:hidden;aspect-ratio:1/1;min-height:240px;background:radial-gradient(circle at 30% 40%,rgba(122,162,255,.12),transparent 35%),
     radial-gradient(circle at 70% 60%,rgba(122,162,255,.08),transparent 40%),#080c19;border:1px solid rgba(255,255,255,.06)}
   .camera-feed{width:100%;height:100%;object-fit:cover;display:block;background:#050814}
-  .bbox{position:absolute;inset:20% 18%;border:2px solid var(--accent);border-radius:10px;box-shadow:0 0 12px rgba(122,162,255,.45);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;pointer-events:none}
+  .bbox{position:absolute;inset:20% 18%;border:2px solid var(--accent);border-radius:10px;box-shadow:0 0 12px rgba(122,162,255,.45);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;pointer-events:none;padding:10px 12px;background:rgba(8,12,25,.55)}
   .bbox-label{padding:4px 10px;border-radius:999px;background:var(--accent);color:#fff;font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:.5px}
-  .bbox-diff{font-size:13px;color:var(--ink);text-align:center;max-width:90%;line-height:1.4;background:rgba(8,12,25,.7);padding:6px 10px;border-radius:10px;border:1px solid rgba(122,162,255,.4)}
+  .bbox-diff{font-size:13px;color:var(--ink);text-align:center;max-width:96%;line-height:1.4;background:rgba(8,12,25,.7);padding:6px 10px;border-radius:10px;border:1px solid rgba(122,162,255,.35);display:flex;flex-direction:column;gap:4px}
+  .bbox-line{display:block}
+  .metric-alert{color:var(--danger);font-weight:800}
+  .bbox.alert{border-color:var(--danger);box-shadow:0 0 16px rgba(255,122,138,.65);background:rgba(45,9,18,.6)}
+  .bbox.alert .bbox-label{background:var(--danger)}
   .row{display:flex;align-items:center;gap:8px}
   .spread{justify-content:space-between}
   .value{font-size:34px;font-weight:800;margin:4px 0}
@@ -181,6 +185,8 @@ const tsLabels = [];
 const maxPoints = 60; // roughly 3 minutes
 const co2Data = []; const t1Data=[]; const t2Data=[]; const rhData=[]; const lightData=[];
 const bboxDiffEl = document.getElementById('bboxDiff');
+const bboxEl = document.getElementById('bbox');
+const bboxLabelEl = bboxEl ? bboxEl.querySelector('.bbox-label') : null;
 const idealSummaryEl = document.getElementById('idealSummary');
 const cameraFeedEl = document.getElementById('cameraFeed');
 const cameraStatusEl = document.getElementById('cameraStatus');
@@ -191,6 +197,9 @@ const contaminantListEl = document.getElementById('contaminantList');
 const lastDetectEl = document.getElementById('lastDetect');
 const targetQuickEl = document.getElementById('targetQuick');
 const cameraOrder = [0,1];
+const targetLabel = 'shiitake';
+const dangerLabels = ['mold','fly agaric'];
+let latestDetection = {};
 let lastCameraUrl = null;
 const controlButtons = {};
 const overrideBadge = document.getElementById('overrideBadge');
@@ -260,20 +269,72 @@ function average(values){
   return valid.reduce((a,b)=>a+b,0)/valid.length;
 }
 
-function updateBoundingBox(now){
+function parseRange(value){
+  if(!value || typeof value !== 'string') return null;
+  const match = value.match(/([\d.]+)\s*-\s*([\d.]+)/);
+  if(!match) return null;
+  return [Number(match[1]), Number(match[2])];
+}
+
+function valueInRange(value, ideal, fallbackTolerance){
+  if(value==null) return false;
+  const range = parseRange(ideal.range || ideal.range_str);
+  if(range){
+    const [lo, hi] = range;
+    return value >= lo && value <= hi;
+  }
+  const target = ideal.value;
+  return Math.abs(value - target) <= fallbackTolerance;
+}
+
+function updateBoundingBox(now, detection={}){
   const tempAvg = average([now.temp1_c, now.temp2_c]);
   const humidity = typeof now.rh_air === 'number'? now.rh_air : null;
   const co2 = typeof now.co2_ppm === 'number'? now.co2_ppm : null;
   const light = typeof now.light === 'number'? now.light : null;
+  const detectionLabel = (detection.label || '').toLowerCase();
+  const detectionProb = typeof detection.probability === 'number' ? detection.probability : 0;
+  const isDanger = dangerLabels.includes(detectionLabel);
+  const isTarget = detectionLabel === targetLabel;
 
-  const deltas = [
-    `Temp Δ ${formatDelta(tempAvg, IDEAL.temp_c, '°C', 1)}`,
-    `Humidity Δ ${formatDelta(humidity, IDEAL.humidity, '%RH', 1)}`,
-    `CO₂ Δ ${formatDelta(co2, IDEAL.co2_ppm, 'ppm', 0)}`,
-    `Light Δ ${formatDelta(light, IDEAL.light_lux, 'lux', 0)}`,
+  if(bboxEl){
+    bboxEl.classList.toggle('alert', isDanger);
+  }
+  if(bboxLabelEl){
+    bboxLabelEl.textContent = isDanger ? 'Danger' : 'Target';
+  }
+
+  const metrics = [
+    {label:'温度', value: tempAvg, ideal:{value: IDEAL.temp_c, range: IDEAL.temp_range}, unit:'°C', tolerance:1},
+    {label:'湿度', value: humidity, ideal:{value: IDEAL.humidity, range: IDEAL.humidity_range}, unit:'%RH', tolerance:5},
+    {label:'CO₂', value: co2, ideal:{value: IDEAL.co2_ppm, range: IDEAL.co2_range}, unit:'ppm', tolerance:500},
+    {label:'光照', value: light, ideal:{value: IDEAL.light_lux, range: IDEAL.light_range}, unit:'lux', tolerance:25},
   ];
 
-  bboxDiffEl.textContent = deltas.join(' · ');
+  const lines = [];
+
+  if(isDanger){
+    const pct = formatPercent(detectionProb);
+    lines.push(`<span class="bbox-line metric-alert">危险污染: ${detectionLabel || '未知'} (${pct})</span>`);
+    lines.push('<span class="bbox-line">请立即隔离、清理现场</span>');
+  }else{
+    const header = isTarget
+      ? `Shiitake 置信度 ${formatPercent(detectionProb || detection.mushroom_confidence)}`
+      : '等待清晰画面…';
+    lines.push(`<span class="bbox-line">${header}</span>`);
+
+    metrics.forEach(m=>{
+      const inRange = valueInRange(m.value, m.ideal, m.tolerance);
+      const cls = inRange ? '' : 'metric-alert';
+      const valueText = m.value==null ? '--' : `${m.value.toFixed(1)}${m.unit}`;
+      const idealText = m.ideal.range || `${m.ideal.value}${m.unit}`;
+      lines.push(`<span class="bbox-line ${cls}">${m.label}: ${valueText} · 目标 ${idealText}</span>`);
+    });
+  }
+
+  if(bboxDiffEl){
+    bboxDiffEl.innerHTML = lines.join('');
+  }
 }
 
 function renderTargetQuick(){
@@ -300,12 +361,16 @@ function setProgressBar(el, value, danger=false){
 
 function renderDetection(cameraData={}){
   const detection = cameraData.detection || {};
+  latestDetection = detection;
+  const label = (detection.label || '').toLowerCase();
   const mushProb = typeof detection.mushroom_confidence === 'number'
     ? detection.mushroom_confidence
-    : (typeof detection.confidence === 'number' ? detection.confidence : 0);
+    : (typeof detection.probability === 'number' ? detection.probability : (typeof detection.confidence === 'number' ? detection.confidence : 0));
+  const isDanger = dangerLabels.includes(label);
+  const isTarget = label === targetLabel;
 
-  if(mushroomProbEl) mushroomProbEl.textContent = formatPercent(mushProb);
-  if(mushroomProbBarEl) setProgressBar(mushroomProbBarEl, mushProb);
+  if(mushroomProbEl) mushroomProbEl.textContent = isDanger ? '危险' : formatPercent(mushProb);
+  if(mushroomProbBarEl) setProgressBar(mushroomProbBarEl, mushProb, isDanger);
 
   if(lastDetectEl){
     const ts = cameraData.last_detection_ts ? new Date(cameraData.last_detection_ts*1000) : null;
@@ -314,20 +379,30 @@ function renderDetection(cameraData={}){
 
   if(contaminantListEl){
     contaminantListEl.innerHTML = '';
-    (detection.contaminants || []).forEach(item=>{
-      const prob = typeof item.prob === 'number' ? item.prob : 0;
-      const row = document.createElement('div');
-      row.className = 'contam-row';
-      row.innerHTML = `
-        <div class="row"><div>${item.name || '污染物'}</div><div class="pill compact">${formatPercent(prob)}</div></div>
-        <div class="progress small"><div class="progress-bar danger" style="width:${(Math.max(0, Math.min(1, prob))*100).toFixed(1)}%"></div></div>
-      `;
-      contaminantListEl.appendChild(row);
-    });
+    if(isDanger){
+      const warning = document.createElement('div');
+      warning.className = 'contam-row';
+      warning.innerHTML = `<div class="row"><div class="pill compact">${label || '污染'}</div><div class="pill compact" style="background:rgba(255,122,138,.2);color:#fff">危险</div></div><div class="progress small"><div class="progress-bar danger" style="width:${(Math.min(1, mushProb||0)*100).toFixed(1)}%"></div></div>`;
+      contaminantListEl.appendChild(warning);
+    }else{
+      (detection.contaminants || []).forEach(item=>{
+        const prob = typeof item.prob === 'number' ? item.prob : 0;
+        const row = document.createElement('div');
+        row.className = 'contam-row';
+        row.innerHTML = `
+          <div class="row"><div>${item.name || '污染物'}</div><div class="pill compact">${formatPercent(prob)}</div></div>
+          <div class="progress small"><div class="progress-bar danger" style="width:${(Math.max(0, Math.min(1, prob))*100).toFixed(1)}%"></div></div>
+        `;
+        contaminantListEl.appendChild(row);
+      });
+    }
   }
 
   if(growthInfoEl){
-    if(mushProb >= 0.8){
+    if(isDanger){
+      growthInfoEl.classList.add('active');
+      growthInfoEl.innerHTML = `检测到污染: ${label || '未知'} · 立即警戒`;
+    }else if(isTarget && mushProb >= 0.8){
       growthInfoEl.classList.add('active');
       growthInfoEl.innerHTML = `冬菇概率 ${formatPercent(mushProb)}，维持温度 ${IDEAL.temp_range || `${formatNumber(IDEAL.temp_c,1)}°C`}、湿度 ${IDEAL.humidity_range || `${formatNumber(IDEAL.humidity,1)}%RH`}、CO₂ ${IDEAL.co2_range || `${formatNumber(IDEAL.co2_ppm,0)} ppm`}、光照 ${IDEAL.light_range || `${formatNumber(IDEAL.light_lux,0)} lux`}。`;
     }else{
@@ -465,7 +540,7 @@ async function tick(){
     lightChart.update('none');
 
     renderDetection(j.camera || {});
-    updateBoundingBox(n);
+    updateBoundingBox(n, latestDetection || {});
   }catch(e){
     // ignore
   }
