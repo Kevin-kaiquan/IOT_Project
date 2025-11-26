@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """Main application entry for environment monitoring and control."""
+from __future__ import annotations
 import os
 import sys
 import time
@@ -9,8 +10,6 @@ import logging
 import random
 import threading
 from typing import Optional, Tuple
-
-import requests
 
 from flask import Flask, jsonify, render_template, request
 
@@ -52,10 +51,6 @@ CO2_SAFE_STOP   = getattr(CFG, "CO2_SAFE_STOP", 650.0)
 CAMERA_LED_WARMUP_SEC = getattr(CFG, "CAMERA_LED_WARMUP_SEC", 0.8)
 CAMERA_DETECT_MIN_SEC = getattr(CFG, "CAMERA_DETECT_MIN_SEC", 5.0)
 CAMERA_DETECT_MAX_SEC = getattr(CFG, "CAMERA_DETECT_MAX_SEC", 10.0)
-
-ROBOFLOW_MODEL_ID = os.getenv("ROBOFLOW_MODEL_ID", "kevin-stoob/mushroom_demo-gkc1f-instant-1")
-ROBOFLOW_API_KEY = os.getenv("ROBOFLOW_API_KEY", "OVH73o1hdgSYepnRlv4U")
-ROBOFLOW_BASE_URL = f"https://detect.roboflow.com/{ROBOFLOW_MODEL_ID}"
 
 HUMID_LOW_THRESHOLD  = getattr(CFG, "HUMID_LOW_THRESHOLD", 55.0)
 HUMID_HIGH_THRESHOLD = getattr(CFG, "HUMID_HIGH_THRESHOLD", 65.0)
@@ -123,9 +118,15 @@ class SimplePID:
 class CameraSupervisor:
     """Schedule camera detections and track recent results."""
 
-    def __init__(self, controller: "DeviceController", camera: "CameraManager") -> None:
+    def __init__(
+        self,
+        controller: "DeviceController",
+        camera: "CameraManager",
+        detector: Optional[TeachableMachineDetector] = None,
+    ) -> None:
         self.controller = controller
         self.camera = camera
+        self.detector = detector or TeachableMachineDetector(os.path.join(ROOT, "model"))
         self.mushroom_count = 0
         self.last_detection_ts: Optional[float] = None
         self.last_detection_result: dict = {
@@ -152,15 +153,25 @@ class CameraSupervisor:
                 continue
         raise RuntimeError("no camera frame available")
 
-    def _send_to_roboflow(self, frame: bytes) -> dict:
-        resp = requests.post(
-            ROBOFLOW_BASE_URL,
-            params={"api_key": ROBOFLOW_API_KEY},
-            files={"file": ("frame.jpg", frame, "image/jpeg")},
-            timeout=12,
-        )
-        resp.raise_for_status()
-        return resp.json()
+    def _run_model(self, frame: bytes) -> dict:
+        """Invoke the local Teachable Machine model and normalize output."""
+        if not getattr(self.detector, "interpreter", None):
+            return {}
+        try:
+            result = self.detector.detect(frame)
+        except Exception as exc:
+            log.warning("local detection failed: %s", exc)
+            return {}
+
+        predictions = result.get("predictions") or []
+        for p in predictions:
+            p["confidence"] = self._normalize_conf(p.get("confidence") or 0.0)
+
+        return {
+            "predictions": predictions,
+            "label": result.get("label") or "unknown",
+            "probability": self._normalize_conf(result.get("probability") or 0.0),
+        }
 
     @staticmethod
     def _normalize_conf(val: float) -> float:
@@ -172,18 +183,17 @@ class CameraSupervisor:
 
     def perform_detection(self) -> dict:
         cam_id, frame = self._capture_frame()
-        data = self._send_to_roboflow(frame)
+        data = self._run_model(frame)
         predictions = data.get("predictions") or []
 
-        mush_preds = [
-            p
-            for p in predictions
-            if str(p.get("class") or "").lower().startswith("mushroom")
-        ]
-        mush_conf = max(
-            (self._normalize_conf(p.get("confidence")) for p in mush_preds),
-            default=0.0,
-        )
+        target_label = "shiitake"
+        danger_labels = {"mold", "fly agaric"}
+
+        mush_conf = 0.0
+        for p in predictions:
+            label = str(p.get("class") or "").lower()
+            if label == target_label:
+                mush_conf = max(mush_conf, self._normalize_conf(p.get("confidence")))
 
         contaminants = [
             {
@@ -191,14 +201,20 @@ class CameraSupervisor:
                 "prob": self._normalize_conf(p.get("confidence")),
             }
             for p in predictions
-            if p not in mush_preds
+            if str(p.get("class") or "").lower() in danger_labels
         ]
 
+        detection_label = str(data.get("label") or "unknown").lower()
+        detection_prob = self._normalize_conf(data.get("probability") or 0.0)
+        count = 1 if detection_label == target_label and detection_prob >= 0.6 else 0
+
         return {
-            "count": len(mush_preds),
+            "count": count,
             "mushroom_confidence": mush_conf,
             "contaminants": contaminants,
             "predictions": predictions,
+            "label": detection_label,
+            "probability": detection_prob,
             "camera_id": cam_id,
         }
 
@@ -230,6 +246,7 @@ class CameraSupervisor:
 
 from actuators.atomizer import Atomizer
 from services.camera import CameraManager
+from services.detector import TeachableMachineDetector
 from services.sampler import Sampler
 from services.oled import OledDisplay
 from sensors.EnvironmentController import DeviceController
@@ -248,7 +265,8 @@ device_controller = DeviceController(HEATER_PIN, FAN_PIN, LED_PIN)
 camera_manager = CameraManager(device_indices=[0, 1])
 atexit.register(camera_manager.cleanup)
 
-camera_supervisor = CameraSupervisor(device_controller, camera_manager)
+teachable_detector = TeachableMachineDetector(os.path.join(ROOT, "model"))
+camera_supervisor = CameraSupervisor(device_controller, camera_manager, teachable_detector)
 atexit.register(camera_supervisor.stop)
 
 oled = OledDisplay(bus=OLED_BUS, addr=OLED_ADDR, rotate=OLED_ROTATE, fps=OLED_FPS)
