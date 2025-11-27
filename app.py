@@ -51,6 +51,13 @@ CAMERA_LED_WARMUP_SEC = getattr(CFG, "CAMERA_LED_WARMUP_SEC", 0.8)
 CAMERA_DETECT_MIN_SEC = getattr(CFG, "CAMERA_DETECT_MIN_SEC", 5.0)
 CAMERA_DETECT_MAX_SEC = getattr(CFG, "CAMERA_DETECT_MAX_SEC", 10.0)
 
+GROWTH_PHASE_RULES = {
+    "unknown": {"co2_target": CO2_SAFE_TARGET, "co2_low": CO2_SAFE_STOP, "co2_high": CO2_HIGH_THRESHOLD},
+    "mycelium": {"co2_target": 900.0, "co2_low": 800.0, "co2_high": 1000.0},
+    "fruiting": {"co2_target": 750.0, "co2_low": 650.0, "co2_high": 900.0},
+    "harvest": {"co2_target": 500.0, "co2_low": 480.0, "co2_high": 520.0, "ventilate": True},
+}
+
 HUMID_LOW_THRESHOLD  = getattr(CFG, "HUMID_LOW_THRESHOLD", 55.0)
 HUMID_HIGH_THRESHOLD = getattr(CFG, "HUMID_HIGH_THRESHOLD", 65.0)
 
@@ -114,6 +121,38 @@ class SimplePID:
         return output
 
 
+class GrowthPhaseTracker:
+    """Track growth phase transitions based on detection labels."""
+
+    def __init__(self) -> None:
+        self.phase: str = "unknown"
+        self.shiitake_streak: int = 0
+
+    @staticmethod
+    def _normalize_label(label: Optional[str]) -> str:
+        return str(label or "").strip().lower()
+
+    def update(self, label: Optional[str]) -> None:
+        normalized = self._normalize_label(label)
+        shiitake_labels = {"shiitake", "shitake"}
+
+        if normalized in shiitake_labels:
+            self.shiitake_streak += 1
+            self.phase = "harvest" if self.shiitake_streak >= 5 else "fruiting"
+        elif normalized == "base":
+            self.phase = "mycelium"
+            self.shiitake_streak = 0
+        elif normalized in {"mold", "fly agaric"}:
+            self.shiitake_streak = 0
+        else:
+            self.shiitake_streak = 0
+            if normalized:
+                self.phase = "unknown"
+
+    def as_dict(self) -> dict:
+        return {"phase": self.phase, "shiitake_streak": self.shiitake_streak}
+
+
 class CameraSupervisor:
     """Schedule camera detections and track recent results."""
 
@@ -132,6 +171,7 @@ class CameraSupervisor:
             "mushroom_confidence": 0.0,
             "contaminants": [],
         }
+        self.growth_tracker = GrowthPhaseTracker()
         self._stop_evt = threading.Event()
         self._th = threading.Thread(target=self._loop, name="camera-supervisor", daemon=True)
 
@@ -185,13 +225,13 @@ class CameraSupervisor:
         data = self._run_model(frame)
         predictions = data.get("predictions") or []
 
-        target_label = "shiitake"
+        target_labels = {"shiitake", "shitake"}
         danger_labels = {"mold", "fly agaric"}
 
         mush_conf = 0.0
         for p in predictions:
             label = str(p.get("class") or "").lower()
-            if label == target_label:
+            if label in target_labels:
                 mush_conf = max(mush_conf, self._normalize_conf(p.get("confidence")))
 
         contaminants = [
@@ -205,7 +245,10 @@ class CameraSupervisor:
 
         detection_label = str(data.get("label") or "unknown").lower()
         detection_prob = self._normalize_conf(data.get("probability") or 0.0)
-        count = 1 if detection_label == target_label and detection_prob >= 0.6 else 0
+        count = 1 if detection_label in target_labels and detection_prob >= 0.6 else 0
+
+        self.growth_tracker.update(detection_label)
+        growth_phase = self.growth_tracker.as_dict()
 
         return {
             "count": count,
@@ -215,6 +258,7 @@ class CameraSupervisor:
             "label": detection_label,
             "probability": detection_prob,
             "camera_id": cam_id,
+            "growth_phase": growth_phase,
         }
 
     def _loop(self) -> None:
@@ -241,6 +285,7 @@ class CameraSupervisor:
             "last_detection_ts": self.last_detection_ts,
             "led": "on" if self.controller.led_on else "off",
             "detection": self.last_detection_result,
+            "growth_phase": self.growth_tracker.as_dict(),
         }
 
 from actuators.atomizer import Atomizer
@@ -471,19 +516,20 @@ def control_task():
         t2    = now.get("temp2_c")
         light = now.get("light")
         rh    = now.get("rh_air")
-        mushrooms = camera_supervisor.mushroom_count
+        growth_phase = camera_supervisor.growth_tracker.phase
+        phase_rules = GROWTH_PHASE_RULES.get(growth_phase, GROWTH_PHASE_RULES["unknown"])
+        fan_pid.setpoint = phase_rules.get("co2_target", CO2_SAFE_TARGET)
 
-        manage_fan = mushrooms <= 0
         device_controller.update_environment(
             temp1=t1,
             temp2=t2,
-            co2_ppm=co2 if manage_fan else None,
+            co2_ppm=None,
             light=light,
             temp_set=TEMP_SETPOINT,
             temp_tolerance=TEMP_TOLERANCE,
-            co2_high=CO2_HIGH_THRESHOLD,
-            co2_low=CO2_LOW_THRESHOLD,
-            manage_fan=manage_fan,
+            co2_high=phase_rules.get("co2_high", CO2_HIGH_THRESHOLD),
+            co2_low=phase_rules.get("co2_low", CO2_LOW_THRESHOLD),
+            manage_fan=False,
         )
 
         heater_manual = _get_override_state("heater")
@@ -503,12 +549,24 @@ def control_task():
 
         if fan_manual is not None:
             device_controller.set_fan(fan_manual)
-        elif mushrooms > 0 and co2 is not None:
-            output = fan_pid.step(co2, SAMPLE_INTERVAL_SEC)
-            if co2 <= CO2_SAFE_STOP or mushrooms <= 0:
-                device_controller.set_fan(False)
+        elif co2 is not None:
+            try:
+                co2_val = float(co2)
+            except (TypeError, ValueError):
+                co2_val = None
+
+            if co2_val is None:
+                fan_pid.reset()
+            elif phase_rules.get("ventilate"):
+                device_controller.set_fan(co2_val > phase_rules.get("co2_low", CO2_SAFE_STOP))
             else:
-                device_controller.set_fan(output > 0)
+                output = fan_pid.step(co2_val, SAMPLE_INTERVAL_SEC)
+                if co2_val <= phase_rules.get("co2_low", CO2_SAFE_STOP):
+                    device_controller.set_fan(False)
+                elif co2_val >= phase_rules.get("co2_high", CO2_HIGH_THRESHOLD):
+                    device_controller.set_fan(True)
+                else:
+                    device_controller.set_fan(output > 0)
         else:
             fan_pid.reset()
 

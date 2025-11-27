@@ -193,8 +193,8 @@ const contaminantListEl = document.getElementById('contaminantList');
 const lastDetectEl = document.getElementById('lastDetect');
 const targetQuickEl = document.getElementById('targetQuick');
 const cameraOrder = [0,1];
-const targetLabel = 'shiitake';
-const dangerLabels = ['mold','fly agaric'];
+const targetLabels = ['shiitake','shitake'];
+const neutralLabels = ['mold','fly agaric'];
 let latestDetection = {};
 let lastCameraUrl = null;
 const controlButtons = {};
@@ -290,14 +290,15 @@ function updateBoundingBox(now, detection={}){
   const light = typeof now.light === 'number'? now.light : null;
   const detectionLabel = (detection.label || '').toLowerCase();
   const detectionProb = typeof detection.probability === 'number' ? detection.probability : 0;
-  const isDanger = dangerLabels.includes(detectionLabel);
-  const isTarget = detectionLabel === targetLabel;
+  const isTarget = targetLabels.includes(detectionLabel);
+  const isBase = detectionLabel === 'base';
+  const isNeutral = neutralLabels.includes(detectionLabel);
 
   if(bboxEl){
-    bboxEl.classList.toggle('alert', isDanger);
+    bboxEl.classList.remove('alert');
   }
   if(bboxLabelEl){
-    bboxLabelEl.textContent = isDanger ? 'Danger' : 'Target';
+    bboxLabelEl.textContent = isBase ? 'Base' : (isTarget ? 'Target' : 'Monitor');
   }
 
   const metrics = [
@@ -309,10 +310,10 @@ function updateBoundingBox(now, detection={}){
 
   const lines = [];
 
-  if(isDanger){
-    const pct = formatPercent(detectionProb);
-    lines.push(`<span class="bbox-line metric-alert">危险污染: ${detectionLabel || '未知'} (${pct})</span>`);
-    lines.push('<span class="bbox-line">请立即隔离、清理现场</span>');
+  if(isBase){
+    lines.push('<span class="bbox-line">检测到 base · 菌丝生长期间</span>');
+  }else if(isNeutral){
+    lines.push(`<span class="bbox-line">标签: ${detectionLabel || '未知'}</span>`);
   }else{
     const header = isTarget
       ? `Shiitake 置信度 ${formatPercent(detectionProb || detection.mushroom_confidence)}`
@@ -362,11 +363,20 @@ function renderDetection(cameraData={}){
   const mushProb = typeof detection.mushroom_confidence === 'number'
     ? detection.mushroom_confidence
     : (typeof detection.probability === 'number' ? detection.probability : (typeof detection.confidence === 'number' ? detection.confidence : 0));
-  const isDanger = dangerLabels.includes(label);
-  const isTarget = label === targetLabel;
+  const isTarget = targetLabels.includes(label);
+  const isBase = label === 'base';
+  const isNeutral = neutralLabels.includes(label);
+  const growthPhase = cameraData.growth_phase || detection.growth_phase || {};
+  const phaseName = (growthPhase.phase || 'unknown').toLowerCase();
+  const phaseText = {
+    unknown:'生长阶段待确认',
+    mycelium:'菌丝生长期',
+    fruiting:'出菇期',
+    harvest:'收获/通风期'
+  }[phaseName] || '生长阶段待确认';
 
-  if(mushroomProbEl) mushroomProbEl.textContent = isDanger ? '危险' : formatPercent(mushProb);
-  if(mushroomProbBarEl) setProgressBar(mushroomProbBarEl, mushProb, isDanger);
+  if(mushroomProbEl) mushroomProbEl.textContent = isBase ? 'base' : (isNeutral ? (label || '--') : formatPercent(mushProb));
+  if(mushroomProbBarEl) setProgressBar(mushroomProbBarEl, isBase || isNeutral ? 0 : mushProb, false);
 
   if(lastDetectEl){
     const ts = cameraData.last_detection_ts ? new Date(cameraData.last_detection_ts*1000) : null;
@@ -375,12 +385,7 @@ function renderDetection(cameraData={}){
 
   if(contaminantListEl){
     contaminantListEl.innerHTML = '';
-    if(isDanger){
-      const warning = document.createElement('div');
-      warning.className = 'contam-row';
-      warning.innerHTML = `<div class="row"><div class="pill compact">${label || '污染'}</div><div class="pill compact" style="background:rgba(255,122,138,.2);color:#fff">危险</div></div><div class="progress small"><div class="progress-bar danger" style="width:${(Math.min(1, mushProb||0)*100).toFixed(1)}%"></div></div>`;
-      contaminantListEl.appendChild(warning);
-    }else{
+    if(!isBase && !isNeutral){
       (detection.contaminants || []).forEach(item=>{
         const prob = typeof item.prob === 'number' ? item.prob : 0;
         const row = document.createElement('div');
@@ -395,15 +400,21 @@ function renderDetection(cameraData={}){
   }
 
   if(growthInfoEl){
-    if(isDanger){
+    if(isBase){
       growthInfoEl.classList.add('active');
-      growthInfoEl.innerHTML = `检测到污染: ${label || '未知'} · 立即警戒`;
+      growthInfoEl.textContent = '检测到 base · 默认为菌丝生长期间';
+    }else if(isNeutral){
+      growthInfoEl.classList.remove('active');
+      growthInfoEl.textContent = `检测到标签 ${label || '--'}，保持监测。`;
+    }else if(phaseName === 'harvest'){
+      growthInfoEl.classList.add('active');
+      growthInfoEl.textContent = '持续识别到冬菇，进入收获/通风阶段，风机将保持通风以将 CO₂ 控制在约 500 ppm。';
     }else if(isTarget && mushProb >= 0.8){
       growthInfoEl.classList.add('active');
-      growthInfoEl.innerHTML = `冬菇概率 ${formatPercent(mushProb)}，维持温度 ${IDEAL.temp_range || `${formatNumber(IDEAL.temp_c,1)}°C`}、湿度 ${IDEAL.humidity_range || `${formatNumber(IDEAL.humidity,1)}%RH`}、CO₂ ${IDEAL.co2_range || `${formatNumber(IDEAL.co2_ppm,0)} ppm`}、光照 ${IDEAL.light_range || `${formatNumber(IDEAL.light_lux,0)} lux`}。`;
+      growthInfoEl.innerHTML = `${phaseText} · 冬菇概率 ${formatPercent(mushProb)}，维持温度 ${IDEAL.temp_range || `${formatNumber(IDEAL.temp_c,1)}°C`}、湿度 ${IDEAL.humidity_range || `${formatNumber(IDEAL.humidity,1)}%RH`}、CO₂ ${IDEAL.co2_range || `${formatNumber(IDEAL.co2_ppm,0)} ppm`}、光照 ${IDEAL.light_range || `${formatNumber(IDEAL.light_lux,0)} lux`}。`;
     }else{
       growthInfoEl.classList.remove('active');
-      growthInfoEl.textContent = '冬菇概率不足 0.8，等待清晰画面后再展示生长信息…';
+      growthInfoEl.textContent = `${phaseText} · 冬菇概率不足 0.8，等待清晰画面后再展示生长信息…`;
     }
   }
 }
