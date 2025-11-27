@@ -1,5 +1,7 @@
+import csv
 import threading, time, random, logging
 from collections import deque
+from pathlib import Path
 from typing import Optional, Dict, Any, Tuple
 from sensors.veml7700 import VEML7700
 
@@ -28,6 +30,13 @@ class Sampler:
         self._stop = threading.Event()
         self._th = threading.Thread(target=self._loop, daemon=True)
 
+        self._log_dir = Path(__file__).resolve().parent.parent / "history_data"
+        self._log_dir.mkdir(parents=True, exist_ok=True)
+        self._log_file_path: Optional[Path] = None
+        self._log_file = None
+        self._csv_writer = None
+        self._session_start = time.time()
+
         self.veml7700: Optional[VEML7700] = None
         try:
             self.veml7700 = VEML7700(busno=VEML7700_I2C_BUS, addr=VEML7700_I2C_ADDR)
@@ -54,6 +63,7 @@ class Sampler:
     def stop(self):
         self._stop.set()
         self._th.join(timeout=1.0)
+        self._finalize_log()
 
     def _read_scd41(self) -> Tuple[Optional[float], Optional[float], Optional[float], str]:
         if self.scd41:
@@ -93,14 +103,71 @@ class Sampler:
                 log.warning(f"VEML7700 read failed: {e}")
         return None
 
+    def _ensure_log(self) -> None:
+        if self._csv_writer is not None:
+            return
+        start_stamp = time.strftime("%Y%m%d_%H%M%S", time.localtime(self._session_start))
+        self._log_file_path = self._log_dir / f"session_{start_stamp}_active.csv"
+        self._log_file = self._log_file_path.open("w", newline="", encoding="utf-8")
+        self._csv_writer = csv.writer(self._log_file)
+        self._csv_writer.writerow([
+            "timestamp",
+            "co2_ppm",
+            "co2_source",
+            "air_temp_c",
+            "air_humidity",
+            "probe_temp1_c",
+            "probe_temp2_c",
+            "light_lux",
+        ])
+
+    def _append_log_row(self, row: dict) -> None:
+        self._ensure_log()
+        if not self._csv_writer or not self._log_file:
+            return
+        self._csv_writer.writerow([
+            row.get("ts"),
+            row.get("co2_ppm"),
+            row.get("co2_from"),
+            row.get("t_air_c"),
+            row.get("rh_air"),
+            row.get("temp1_c"),
+            row.get("temp2_c"),
+            row.get("light"),
+        ])
+        self._log_file.flush()
+
+    def _finalize_log(self) -> None:
+        if self._log_file is None or self._log_file_path is None:
+            return
+        try:
+            self._log_file.flush()
+            self._log_file.close()
+        except Exception:
+            pass
+        end_stamp = time.strftime("%Y%m%d_%H%M%S", time.localtime())
+        final_path = self._log_dir / f"session_{end_stamp}.csv"
+        try:
+            self._log_file_path.rename(final_path)
+        except Exception:
+            final_path = self._log_dir / f"session_{end_stamp}_data.csv"
+            try:
+                self._log_file_path.rename(final_path)
+            except Exception:
+                pass
+        self._log_file = None
+        self._csv_writer = None
+        self._log_file_path = None
+
     def _loop(self):
-        from datetime import datetime
         while not self._stop.is_set():
+            from datetime import datetime
+
             co2, t_air, rh_air, co2_src = self._read_scd41()
             t1, t2 = self._read_probe_t()
             light_intensity = self._read_light()
 
-            self.history.append({
+            entry = {
                 "ts": datetime.now().isoformat(timespec="seconds"),
                 "co2_ppm": co2,
                 "co2_from": co2_src,
@@ -108,8 +175,11 @@ class Sampler:
                 "rh_air": rh_air,
                 "temp1_c": None if t1 is None else round(t1, 2),
                 "temp2_c": None if t2 is None else round(t2, 2),
-                "light": light_intensity
-            })
+                "light": light_intensity,
+            }
+
+            self.history.append(entry)
+            self._append_log_row(entry)
             time.sleep(self.interval)
 
     def snapshot(self) -> Dict[str, Any]:

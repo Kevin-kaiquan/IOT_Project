@@ -303,6 +303,7 @@ _manual_overrides = {
 
 sampler = Sampler(interval_sec=SAMPLE_INTERVAL_SEC)
 sampler.start()
+atexit.register(sampler.stop)
 
 device_controller = DeviceController(HEATER_PIN, FAN_PIN, LED_PIN)
 
