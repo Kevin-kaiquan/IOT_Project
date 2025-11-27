@@ -129,15 +129,15 @@
       <div class="detection-panel">
         <div class="row spread">
           <div>
-            <div style="font-size:13px;color:var(--muted)">冬菇出现概率</div>
+            <div style="font-size:13px;color:var(--muted)">Shiitake probability</div>
             <div class="value small" id="mushroomProb">--</div>
           </div>
-          <div class="chip" id="lastDetect">检测时间: --</div>
+          <div class="chip" id="lastDetect">Last detection: --</div>
         </div>
-        <div class="progress" aria-label="冬菇概率">
+        <div class="progress" aria-label="Shiitake probability">
           <div class="progress-bar" id="mushroomProbBar"></div>
         </div>
-        <div class="growth-info" id="growthInfo">等待检测数据…</div>
+        <div class="growth-info" id="growthInfo">Waiting for detection data…</div>
         <div class="contaminant-list" id="contaminantList"></div>
         <div class="target-quick" id="targetQuick"></div>
       </div>
@@ -176,9 +176,8 @@ const SAMPLE_INTERVAL = {{ sample_interval|tojson }};
 const IDEAL = {{ ideal_environment|tojson }};
 document.getElementById('interval').textContent = SAMPLE_INTERVAL;
 
-// --- charts ---
 const tsLabels = [];
-const maxPoints = 60; // roughly 3 minutes
+const maxPoints = 60;
 const co2Data = []; const t1Data=[]; const t2Data=[]; const rhData=[]; const lightData=[];
 const bboxDiffEl = document.getElementById('bboxDiff');
 const bboxEl = document.getElementById('bbox');
@@ -193,8 +192,8 @@ const contaminantListEl = document.getElementById('contaminantList');
 const lastDetectEl = document.getElementById('lastDetect');
 const targetQuickEl = document.getElementById('targetQuick');
 const cameraOrder = [0,1];
-const targetLabel = 'shiitake';
-const dangerLabels = ['mold','fly agaric'];
+const targetLabels = ['shiitake','shitake'];
+const neutralLabels = ['mold','fly agaric'];
 let latestDetection = {};
 let lastCameraUrl = null;
 const controlButtons = {};
@@ -290,33 +289,34 @@ function updateBoundingBox(now, detection={}){
   const light = typeof now.light === 'number'? now.light : null;
   const detectionLabel = (detection.label || '').toLowerCase();
   const detectionProb = typeof detection.probability === 'number' ? detection.probability : 0;
-  const isDanger = dangerLabels.includes(detectionLabel);
-  const isTarget = detectionLabel === targetLabel;
+  const isTarget = targetLabels.includes(detectionLabel);
+  const isBase = detectionLabel === 'base';
+  const isNeutral = neutralLabels.includes(detectionLabel);
 
   if(bboxEl){
-    bboxEl.classList.toggle('alert', isDanger);
+    bboxEl.classList.remove('alert');
   }
   if(bboxLabelEl){
-    bboxLabelEl.textContent = isDanger ? 'Danger' : 'Target';
+    bboxLabelEl.textContent = isBase ? 'Base' : (isTarget ? 'Target' : 'Monitor');
   }
 
   const metrics = [
-    {label:'温度', value: tempAvg, ideal:{value: IDEAL.temp_c, range: IDEAL.temp_range}, unit:'°C', tolerance:1},
-    {label:'湿度', value: humidity, ideal:{value: IDEAL.humidity, range: IDEAL.humidity_range}, unit:'%RH', tolerance:5},
+    {label:'Temperature', value: tempAvg, ideal:{value: IDEAL.temp_c, range: IDEAL.temp_range}, unit:'°C', tolerance:1},
+    {label:'Humidity', value: humidity, ideal:{value: IDEAL.humidity, range: IDEAL.humidity_range}, unit:'%RH', tolerance:5},
     {label:'CO₂', value: co2, ideal:{value: IDEAL.co2_ppm, range: IDEAL.co2_range}, unit:'ppm', tolerance:500},
-    {label:'光照', value: light, ideal:{value: IDEAL.light_lux, range: IDEAL.light_range}, unit:'lux', tolerance:25},
+    {label:'Light', value: light, ideal:{value: IDEAL.light_lux, range: IDEAL.light_range}, unit:'lux', tolerance:25},
   ];
 
   const lines = [];
 
-  if(isDanger){
-    const pct = formatPercent(detectionProb);
-    lines.push(`<span class="bbox-line metric-alert">危险污染: ${detectionLabel || '未知'} (${pct})</span>`);
-    lines.push('<span class="bbox-line">请立即隔离、清理现场</span>');
+  if(isBase){
+    lines.push('<span class="bbox-line">Base detected · assumed mycelium stage</span>');
+  }else if(isNeutral){
+    lines.push(`<span class="bbox-line">Label detected: ${detectionLabel || 'unknown'}</span>`);
   }else{
     const header = isTarget
-      ? `Shiitake 置信度 ${formatPercent(detectionProb || detection.mushroom_confidence)}`
-      : '等待清晰画面…';
+      ? `Shiitake confidence ${formatPercent(detectionProb || detection.mushroom_confidence)}`
+      : 'Waiting for a clear frame…';
     lines.push(`<span class="bbox-line">${header}</span>`);
 
     metrics.forEach(m=>{
@@ -324,7 +324,7 @@ function updateBoundingBox(now, detection={}){
       const cls = inRange ? '' : 'metric-alert';
       const valueText = m.value==null ? '--' : `${m.value.toFixed(1)}${m.unit}`;
       const idealText = m.ideal.range || `${m.ideal.value}${m.unit}`;
-      lines.push(`<span class="bbox-line ${cls}">${m.label}: ${valueText} · 目标 ${idealText}</span>`);
+      lines.push(`<span class="bbox-line ${cls}">${m.label}: ${valueText} · Target ${idealText}</span>`);
     });
   }
 
@@ -336,9 +336,9 @@ function updateBoundingBox(now, detection={}){
 function renderTargetQuick(){
   if(!targetQuickEl) return;
   const metrics = [
-    {label:'温度陡度指数', desc:'T_env - T_deep，过高会抑制生长、损耗营养'},
-    {label:'CO₂ 变化率', desc:'ΔCO₂ / Δt，急升或急降提示风机/气体调节阶段'},
-    {label:'湿度稳定指数', desc:'std(24h humidity)，数值越低越平稳'},
+    {label:'Temperature steepness', desc:'T_env - T_deep; high values slow growth'},
+    {label:'CO₂ rate of change', desc:'ΔCO₂ / Δt highlights ventilation shifts'},
+    {label:'Humidity stability', desc:'Lower 24h std means steadier humidity'},
   ];
   targetQuickEl.innerHTML = metrics.map(m=>`<div class="target-chip"><strong>${m.label}</strong><span>${m.desc}</span></div>`).join('');
 }
@@ -362,31 +362,35 @@ function renderDetection(cameraData={}){
   const mushProb = typeof detection.mushroom_confidence === 'number'
     ? detection.mushroom_confidence
     : (typeof detection.probability === 'number' ? detection.probability : (typeof detection.confidence === 'number' ? detection.confidence : 0));
-  const isDanger = dangerLabels.includes(label);
-  const isTarget = label === targetLabel;
+  const isTarget = targetLabels.includes(label);
+  const isBase = label === 'base';
+  const isNeutral = neutralLabels.includes(label);
+  const growthPhase = cameraData.growth_phase || detection.growth_phase || {};
+  const phaseName = (growthPhase.phase || 'unknown').toLowerCase();
+  const phaseText = {
+    unknown:'Phase pending',
+    mycelium:'Mycelium growth',
+    fruiting:'Fruiting',
+    harvest:'Harvest/ventilation'
+  }[phaseName] || 'Phase pending';
 
-  if(mushroomProbEl) mushroomProbEl.textContent = isDanger ? '危险' : formatPercent(mushProb);
-  if(mushroomProbBarEl) setProgressBar(mushroomProbBarEl, mushProb, isDanger);
+  if(mushroomProbEl) mushroomProbEl.textContent = isBase ? 'Base' : (isNeutral ? (label || '--') : formatPercent(mushProb));
+  if(mushroomProbBarEl) setProgressBar(mushroomProbBarEl, isBase || isNeutral ? 0 : mushProb, false);
 
   if(lastDetectEl){
     const ts = cameraData.last_detection_ts ? new Date(cameraData.last_detection_ts*1000) : null;
-    lastDetectEl.textContent = ts ? `检测时间: ${ts.toLocaleTimeString()}` : '检测时间: --';
+    lastDetectEl.textContent = ts ? `Last detection: ${ts.toLocaleTimeString()}` : 'Last detection: --';
   }
 
   if(contaminantListEl){
     contaminantListEl.innerHTML = '';
-    if(isDanger){
-      const warning = document.createElement('div');
-      warning.className = 'contam-row';
-      warning.innerHTML = `<div class="row"><div class="pill compact">${label || '污染'}</div><div class="pill compact" style="background:rgba(255,122,138,.2);color:#fff">危险</div></div><div class="progress small"><div class="progress-bar danger" style="width:${(Math.min(1, mushProb||0)*100).toFixed(1)}%"></div></div>`;
-      contaminantListEl.appendChild(warning);
-    }else{
+    if(!isBase && !isNeutral){
       (detection.contaminants || []).forEach(item=>{
         const prob = typeof item.prob === 'number' ? item.prob : 0;
         const row = document.createElement('div');
         row.className = 'contam-row';
         row.innerHTML = `
-          <div class="row"><div>${item.name || '污染物'}</div><div class="pill compact">${formatPercent(prob)}</div></div>
+          <div class="row"><div>${item.name || 'Contaminant'}</div><div class="pill compact">${formatPercent(prob)}</div></div>
           <div class="progress small"><div class="progress-bar danger" style="width:${(Math.max(0, Math.min(1, prob))*100).toFixed(1)}%"></div></div>
         `;
         contaminantListEl.appendChild(row);
@@ -395,20 +399,25 @@ function renderDetection(cameraData={}){
   }
 
   if(growthInfoEl){
-    if(isDanger){
+    if(isBase){
       growthInfoEl.classList.add('active');
-      growthInfoEl.innerHTML = `检测到污染: ${label || '未知'} · 立即警戒`;
+      growthInfoEl.textContent = 'Base detected · assuming mycelium stage';
+    }else if(isNeutral){
+      growthInfoEl.classList.remove('active');
+      growthInfoEl.textContent = `Label detected: ${label || '--'}. Monitoring continues.`;
+    }else if(phaseName === 'harvest'){
+      growthInfoEl.classList.add('active');
+      growthInfoEl.textContent = 'Consistent shiitake detections; harvesting ventilation holds around 500 ppm CO₂.';
     }else if(isTarget && mushProb >= 0.8){
       growthInfoEl.classList.add('active');
-      growthInfoEl.innerHTML = `冬菇概率 ${formatPercent(mushProb)}，维持温度 ${IDEAL.temp_range || `${formatNumber(IDEAL.temp_c,1)}°C`}、湿度 ${IDEAL.humidity_range || `${formatNumber(IDEAL.humidity,1)}%RH`}、CO₂ ${IDEAL.co2_range || `${formatNumber(IDEAL.co2_ppm,0)} ppm`}、光照 ${IDEAL.light_range || `${formatNumber(IDEAL.light_lux,0)} lux`}。`;
+      growthInfoEl.innerHTML = `${phaseText} · Shiitake probability ${formatPercent(mushProb)}. Keep temp ${IDEAL.temp_range || `${formatNumber(IDEAL.temp_c,1)}°C`}, humidity ${IDEAL.humidity_range || `${formatNumber(IDEAL.humidity,1)}%RH`}, CO₂ ${IDEAL.co2_range || `${formatNumber(IDEAL.co2_ppm,0)} ppm`}, light ${IDEAL.light_range || `${formatNumber(IDEAL.light_lux,0)} lux`}.`;
     }else{
       growthInfoEl.classList.remove('active');
-      growthInfoEl.textContent = '冬菇概率不足 0.8，等待清晰画面后再展示生长信息…';
+      growthInfoEl.textContent = `${phaseText} · Shiitake probability below 0.8; waiting for a clearer frame.`;
     }
   }
 }
 
-// --- camera preview ---
 async function refreshCameraFrame(){
   if(!cameraFeedEl) return;
   for(const camId of cameraOrder){
@@ -426,7 +435,6 @@ async function refreshCameraFrame(){
       if(cameraStatusEl) cameraStatusEl.textContent = `Camera: ${camId}`;
       return;
     }catch(_){
-      // try next camera
     }
   }
   if(cameraStatusEl) cameraStatusEl.textContent = 'Camera: unavailable';
@@ -438,7 +446,6 @@ async function refreshCameraFrame(){
   cameraFeedEl.removeAttribute('src');
 }
 
-// --- manual control / overrides ---
 async function toggleDevice(device){
   const el = controlButtons[device];
   if(!el) return;
@@ -459,7 +466,6 @@ async function sendControl(device, state){
       updateDeviceButtons({[device]: state}, j.overrides || {});
     }
   }catch(_){
-    // ignore
   }
 }
 
@@ -484,7 +490,6 @@ function updateDeviceButtons(states={}, overrides={}){
   }
 }
 
-// --- fetch & update ---
 function pushPoint(arr, v){ arr.push(v); if(arr.length>maxPoints) arr.shift(); }
 function pushLabel(){
   const t = new Date().toLocaleTimeString().slice(0,8);
@@ -501,7 +506,6 @@ async function tick(){
     const states = {heater: devices.heater, fan: devices.fan, led: devices.led, atomizer: j.atomizer};
     const overrides = j.overrides || {};
 
-    // numbers
     document.getElementById('co2').textContent = (n.co2_ppm!=null? Math.round(n.co2_ppm):'--') + ' ppm';
     document.getElementById('co2src').textContent = 'source: ' + (j.co2_source || 'scd41');
     document.getElementById('t1c').textContent = 'T1: ' + (n.temp1_c!=null? n.temp1_c.toFixed(2):'--') + ' °C';
@@ -514,7 +518,6 @@ async function tick(){
     if(atomMeta) atomMeta.textContent = `Atomizer: ${j.atomizer || '--'}`;
     updateDeviceButtons(states, overrides);
 
-    // charts
     pushLabel();
     pushPoint(co2Data, n.co2_ppm ?? null);
     pushPoint(t1Data, n.temp1_c ?? null);
@@ -538,7 +541,6 @@ async function tick(){
     renderDetection(j.camera || {});
     updateBoundingBox(n, latestDetection || {});
   }catch(e){
-    // ignore
   }
 }
 
