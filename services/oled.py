@@ -1,7 +1,5 @@
-# -*- coding: utf-8 -*-
-"""OLED carousel display for CO2, temperature, light, and humidity."""
-
 import time
+import importlib.util, importlib
 from threading import Thread, Event, Lock
 from collections import deque
 from typing import Optional
@@ -9,10 +7,13 @@ from typing import Optional
 from PIL import Image, ImageDraw, ImageFont
 from luma.core.interface.serial import i2c
 FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
-try:
-    from luma.oled.device import ssd1306 as OLED_DEVICE
-except Exception:
-    from luma.oled.device import sh1106 as OLED_DEVICE
+oled_module = importlib.import_module("luma.oled.device") if importlib.util.find_spec("luma.oled.device") else None
+if oled_module and hasattr(oled_module, "ssd1306"):
+    OLED_DEVICE = getattr(oled_module, "ssd1306")
+elif oled_module and hasattr(oled_module, "sh1106"):
+    OLED_DEVICE = getattr(oled_module, "sh1106")
+else:
+    OLED_DEVICE = None
 
 I2C_BUS = 1
 I2C_ADDR = 0x3C
@@ -26,9 +27,10 @@ SMALL_FONT_SIZE = 13
 
 
 class OledDisplay:
-    """Paginated carousel for CO2, temperatures, light, and humidity."""
 
     def __init__(self, bus=I2C_BUS, addr=I2C_ADDR, rotate=ROTATE, fps=FPS):
+        if OLED_DEVICE is None:
+            raise RuntimeError("OLED driver unavailable")
         serial = i2c(port=bus, address=addr)
         self.dev = OLED_DEVICE(serial, rotate=rotate)
         self.W, self.H = self.dev.width, self.dev.height
@@ -61,13 +63,11 @@ class OledDisplay:
         self._evt.set()
 
     def flash(self, text: str, sec: float = 2.0):
-        """Temporarily overlay text for a short duration."""
         self._flash_text = str(text)
         self._flash_until = time.time() + max(0.2, float(sec))
         self._evt.set()
 
     def show_numbers(self, co2_ppm=None, t1=None, t2=None, rh=None, light=None):
-        """Feed the latest sensor values for display."""
         with self._lock:
             self._q.append({
                 "co2": None if co2_ppm is None else float(co2_ppm),
@@ -93,7 +93,6 @@ class OledDisplay:
         d.text((x, y), text, font=font, fill=255)
 
     def _build_page_img(self, page: int, payload: dict) -> Image.Image:
-        """Render a single display page based on the carousel index."""
         img = Image.new("1", (self.W, self.H), 0)
         d = ImageDraw.Draw(img)
 

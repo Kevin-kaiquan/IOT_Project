@@ -1,13 +1,14 @@
 import csv
+import importlib.util
 import threading, time, random, logging
 from collections import deque
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple
 from sensors.veml7700 import VEML7700
 
-try:
+if importlib.util.find_spec("config"):
     import config as CFG
-except Exception:
+else:
     class _CFG: pass
     CFG = _CFG()
 
@@ -94,7 +95,6 @@ class Sampler:
         return t1, t2
 
     def _read_light(self) -> Optional[float]:
-        """Reads light intensity from VEML7700 sensor"""
         if self.veml7700:
             try:
                 lux = self.veml7700.read_light()

@@ -1,6 +1,6 @@
-"""Local Teachable Machine model wrapper using TFLite."""
 from __future__ import annotations
 
+import importlib.util
 import logging
 import os
 from typing import Dict, List, Optional
@@ -8,20 +8,17 @@ from typing import Dict, List, Optional
 import cv2  # type: ignore
 import numpy as np
 
-try:  # pragma: no cover - runtime import guard
+Interpreter = None
+if importlib.util.find_spec("tflite_runtime.interpreter"):
     from tflite_runtime.interpreter import Interpreter  # type: ignore
-except Exception:  # pragma: no cover - runtime import guard
-    try:
-        from tensorflow.lite import Interpreter  # type: ignore
-    except Exception:  # pragma: no cover - runtime import guard
-        Interpreter = None
+elif importlib.util.find_spec("tensorflow.lite"):
+    from tensorflow.lite import Interpreter  # type: ignore
 
 
 log = logging.getLogger(__name__)
 
 
 class TeachableMachineDetector:
-    """Lightweight detector for Teachable Machine image models."""
 
     def __init__(
         self,
@@ -40,7 +37,6 @@ class TeachableMachineDetector:
         self.height, self.width = self._infer_input_size()
 
     def _resolve_model_path(self, preferred: Optional[str]) -> str:
-        """Locate a TFLite model inside the model directory."""
         candidates: List[str] = []
         if preferred:
             candidates.append(os.path.join(self.model_dir, preferred))
@@ -54,12 +50,9 @@ class TeachableMachineDetector:
         for path in candidates:
             if os.path.exists(path):
                 return path
-
-        # Fall back to the first candidate; loading will warn later.
         return candidates[0]
 
     def _resolve_labels_path(self, preferred: Optional[str]) -> str:
-        """Locate a labels file inside the model directory."""
         candidates: List[str] = []
         if preferred:
             candidates.append(os.path.join(self.model_dir, preferred))
@@ -85,14 +78,13 @@ class TeachableMachineDetector:
                     line = line.strip()
                     if not line:
                         continue
-                    # Support formats like "0 class" or raw label text.
                     parts = line.split(maxsplit=1)
                     labels.append(parts[-1])
                 return labels
         except FileNotFoundError:
             log.warning("labels.txt not found in %s", os.path.dirname(self.labels_path))
             return []
-        except Exception as exc:  # pragma: no cover - defensive
+        except Exception as exc:
             log.warning("Failed to load labels: %s", exc)
             return []
 
@@ -108,7 +100,7 @@ class TeachableMachineDetector:
             interpreter = Interpreter(model_path=self.model_path)
             interpreter.allocate_tensors()
             return interpreter
-        except Exception as exc:  # pragma: no cover - runtime safety
+        except Exception as exc:
             log.warning("Failed to initialize TFLite model: %s", exc)
             return None
 
@@ -133,7 +125,6 @@ class TeachableMachineDetector:
         return input_data
 
     def detect(self, jpeg_bytes: bytes) -> Dict:
-        """Run inference on JPEG bytes and return sorted predictions."""
         if not self.interpreter or not self.input_details or not self.output_details:
             raise RuntimeError("TFLite model not initialized")
 

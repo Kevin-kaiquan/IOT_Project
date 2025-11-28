@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""Main application entry for environment monitoring and control."""
 import os
 import sys
 import time
@@ -8,13 +6,14 @@ import atexit
 import logging
 import random
 import threading
+import importlib.util
 from typing import Optional, Tuple
 
 from flask import Flask, jsonify, render_template, request
 
-try:
+if importlib.util.find_spec("RPi.GPIO"):
     import RPi.GPIO as GPIO  # type: ignore
-except Exception:
+else:
     class _MockGPIO:
         BCM=BOARD=OUT=IN=LOW=HIGH=0
         def setwarnings(self,*a,**k): pass
@@ -30,9 +29,9 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-try:
+if importlib.util.find_spec("config"):
     import config as CFG
-except Exception:
+else:
     class _CFG: ...
     CFG = _CFG()
 
@@ -82,7 +81,6 @@ log = logging.getLogger("app")
 
 
 class SimplePID:
-    """Minimal PID controller for fan speed decisions."""
 
     def __init__(
         self,
@@ -122,7 +120,6 @@ class SimplePID:
 
 
 class GrowthPhaseTracker:
-    """Track growth phase transitions based on detection labels."""
 
     def __init__(self) -> None:
         self.phase: str = "unknown"
@@ -154,7 +151,6 @@ class GrowthPhaseTracker:
 
 
 class CameraSupervisor:
-    """Schedule camera detections and track recent results."""
 
     def __init__(
         self,
@@ -193,7 +189,6 @@ class CameraSupervisor:
         raise RuntimeError("no camera frame available")
 
     def _run_model(self, frame: bytes) -> dict:
-        """Invoke the local Teachable Machine model and normalize output."""
         if not getattr(self.detector, "interpreter", None):
             return {}
         try:
@@ -329,7 +324,6 @@ def index():
 
 
 def _cleanup_overrides() -> None:
-    """Remove expired manual override instructions."""
     now = time.time()
     for name, info in list(_manual_overrides.items()):
         exp = info.get("expires_at")
@@ -363,7 +357,6 @@ def _serialize_overrides() -> dict:
 
 @app.route("/api/data")
 def api_data():
-    """Return the latest sensor snapshot and refresh OLED content."""
     snap = sampler.snapshot()
     now = snap.get("now", {}) or {}
 
@@ -388,7 +381,6 @@ def api_data():
 
 @app.route("/api/camera/<int:cam_id>/frame")
 def api_camera_frame(cam_id: int):
-    """Return a JPEG frame for the requested camera id."""
     try:
         frame = camera_manager.get_frame(cam_id)
     except KeyError:
@@ -405,13 +397,11 @@ def api_camera_frame(cam_id: int):
 
 @app.route("/api/camera/status")
 def api_camera_status():
-    """Return readiness information for configured cameras."""
     return jsonify(ok=True, cameras=camera_manager.status())
 
 
 @app.route("/api/atomizer", methods=["GET", "POST"])
 def api_atomizer():
-    """Temporarily toggle the atomizer via manual override."""
     if request.method == "POST":
         data = request.get_json(silent=True) or {}
         state = (data.get("state") or "").lower()
@@ -430,7 +420,6 @@ def api_atomizer():
 
 @app.route("/api/control", methods=["GET", "POST"])
 def api_control():
-    """Unified control endpoint for manual device overrides."""
     if request.method == "GET":
         return jsonify(
             ok=True,
@@ -474,7 +463,6 @@ def api_control():
 
 @app.route("/api/oled/text")
 def api_oled_text():
-    """Flash short text on the OLED for debugging."""
     text = request.args.get("text") or ""
     if not text:
         return jsonify(ok=False, message="text required"), 400
@@ -484,7 +472,6 @@ def api_oled_text():
 
 
 def _control_atomizer_with_rh(rh_air: Optional[float]) -> None:
-    """Toggle the atomizer based on relative humidity thresholds."""
     if rh_air is None:
         return
 
@@ -500,7 +487,6 @@ def _control_atomizer_with_rh(rh_air: Optional[float]) -> None:
 
 
 def control_task():
-    """Background loop that applies control rules using recent samples."""
     log.info("Environment control thread started")
     fan_pid = SimplePID(setpoint=CO2_SAFE_TARGET)
     while True:

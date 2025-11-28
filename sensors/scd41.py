@@ -1,10 +1,12 @@
-import time, logging
+import time, logging, importlib.util, importlib
 from typing import Optional, Tuple, List, Iterable
 
-try:
-    from smbus2 import SMBus, i2c_msg
-except Exception:
-    SMBus = None; i2c_msg = None
+SMBus = None
+i2c_msg = None
+if importlib.util.find_spec("smbus2"):
+    smbus_module = importlib.import_module("smbus2")
+    SMBus = getattr(smbus_module, "SMBus", None)
+    i2c_msg = getattr(smbus_module, "i2c_msg", None)
 
 log = logging.getLogger("scd41")
 
@@ -17,7 +19,6 @@ def _crc8(two: bytes) -> int:
     return c
 
 class SCD41:
-    """Stable SCD41 driver with cached reads."""
     def __init__(self, busno=1, addr: Optional[int]=None, addr_candidates: Iterable[int]=(0x62,0x64)):
         self.busno=busno
         self.addr=addr
@@ -118,7 +119,6 @@ class SCD41:
             return co2,tC,rh
 
         except OSError as e:
-            # Handle common I/O errors with soft reset
             if getattr(e, "errno", None) in (5, 121):
                 self._err_streak += 1
                 log.warning(f"SCD41 read failed: {e} (streak={self._err_streak})")

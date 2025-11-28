@@ -1,4 +1,3 @@
-"""Manage cached OpenCV captures and provide JPEG frames."""
 from __future__ import annotations
 
 import threading

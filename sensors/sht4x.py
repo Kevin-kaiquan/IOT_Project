@@ -1,11 +1,12 @@
-import time
+import time, importlib.util, importlib
 from typing import Optional, Iterable, Tuple
 
-try:
-    from smbus2 import SMBus, i2c_msg
-except Exception:
-    SMBus = None
-    i2c_msg = None
+SMBus = None
+i2c_msg = None
+if importlib.util.find_spec("smbus2"):
+    smbus_module = importlib.import_module("smbus2")
+    SMBus = getattr(smbus_module, "SMBus", None)
+    i2c_msg = getattr(smbus_module, "i2c_msg", None)
 
 def _crc8(two: bytes) -> int:
     c = 0xFF
@@ -16,7 +17,6 @@ def _crc8(two: bytes) -> int:
     return c
 
 class SHT4x:
-    """Minimal SHT4x driver with cached readings."""
     def __init__(self, busno: int = 1, addr: Optional[int] = None, addr_candidates: Iterable[int]=(0x44,0x45)):
         self.busno = busno
         self.addr = addr

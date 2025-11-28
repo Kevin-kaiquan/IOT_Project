@@ -1,6 +1,8 @@
-try:
+import importlib.util
+
+if importlib.util.find_spec("RPi.GPIO"):
     import RPi.GPIO as GPIO  # type: ignore
-except Exception:
+else:
     class _MockGPIO:
         BCM=BOARD=OUT=IN=LOW=HIGH=0
         def setwarnings(self,*a,**k): pass
@@ -12,7 +14,6 @@ except Exception:
     GPIO = _MockGPIO()
 
 class Atomizer:
-    """Atomizer control with configurable polarity."""
     def __init__(self, pin: int, active_high: bool = True, initial: bool = False):
         self.pin = pin
         self.active_high = active_high

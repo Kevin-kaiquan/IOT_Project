@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import time
+import importlib.util
 from typing import Optional
 
-try:
+if importlib.util.find_spec("RPi.GPIO"):
     import RPi.GPIO as GPIO  # type: ignore
-except Exception:  # Provide GPIO mock when hardware is unavailable
+else:
     class _MockGPIO:
         BCM = BOARD = OUT = IN = LOW = HIGH = 0
         def setwarnings(self, *a, **k): pass
@@ -19,7 +20,6 @@ from config import HEATER_PIN, FAN_PIN, LED_PIN
 
 
 class DeviceController:
-    """Controls heater, fan, and LED outputs."""
     def __init__(
         self,
         heater_pin: int = HEATER_PIN,
@@ -90,7 +90,6 @@ class DeviceController:
         manage_fan: bool = True,
         manage_heater: bool = True,
     ) -> None:
-        """Apply heater and fan rules based on sensor inputs."""
         if manage_heater:
             avg_temp: Optional[float] = None
             if temp1 is not None and temp2 is not None:
