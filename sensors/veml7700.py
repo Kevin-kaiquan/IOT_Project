@@ -1,5 +1,9 @@
 import time
-from smbus2 import SMBus
+
+try:
+    from smbus2 import SMBus
+except Exception:
+    SMBus = None
 
 class VEML7700:
     """
@@ -12,11 +16,15 @@ class VEML7700:
     K = 0.0672
 
     def __init__(self, busno: int = 1, addr: int = VEML_ADDR):
+        if SMBus is None:
+            raise RuntimeError("smbus2 is unavailable on this platform")
         self.busno = busno
         self.addr = addr
 
     def _init_sensor(self):
         """Initialize the VEML7700 sensor by setting the ALS configuration."""
+        if SMBus is None:
+            raise RuntimeError("smbus2 is unavailable on this platform")
         try:
             with SMBus(self.busno) as bus:
                 conf_val = 0x0000
@@ -28,6 +36,8 @@ class VEML7700:
 
     def _read_raw(self) -> int:
         """Read raw ambient light data from the VEML7700 sensor."""
+        if SMBus is None:
+            raise RuntimeError("smbus2 is unavailable on this platform")
         try:
             with SMBus(self.busno) as bus:
                 data = bus.read_i2c_block_data(self.addr, self.REG_ALS, 2)
