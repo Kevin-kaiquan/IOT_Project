@@ -1,8 +1,9 @@
 import os, glob, time
 from typing import Optional, List
 
-os.system("modprobe w1-gpio >/dev/null 2>&1")
-os.system("modprobe w1-therm >/dev/null 2>&1")
+if os.name == "posix":
+    os.system("modprobe w1-gpio >/dev/null 2>&1")
+    os.system("modprobe w1-therm >/dev/null 2>&1")
 W1_BASE = "/sys/bus/w1/devices/"
 
 def list_devices() -> List[str]:
