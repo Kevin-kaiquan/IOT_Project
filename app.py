@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """Main application entry for environment monitoring and control."""
+from __future__ import annotations
+
 import os
 import sys
 import time
@@ -38,6 +40,11 @@ except Exception:
 
 SAMPLE_INTERVAL_SEC = getattr(CFG, "SAMPLE_INTERVAL_SEC", 3)
 DEFAULT_OVERRIDE_SEC = getattr(CFG, "MANUAL_OVERRIDE_SEC", 300)
+BACKGROUND_SERVICES_ENABLED = os.getenv("IOT_DISABLE_BACKGROUND", "").lower() not in {
+    "1",
+    "true",
+    "yes",
+}
 
 TEMP_SETPOINT      = getattr(CFG, "TEMP_SETPOINT", 22.0)
 TEMP_TOLERANCE     = getattr(CFG, "TEMP_TOLERANCE", 0.5)
@@ -181,7 +188,8 @@ class CameraSupervisor:
 
     def stop(self) -> None:
         self._stop_evt.set()
-        self._th.join(timeout=1.0)
+        if self._th.is_alive():
+            self._th.join(timeout=1.0)
 
     def _capture_frame(self) -> Tuple[int, bytes]:
         for cam_id in self.camera.device_indices:
@@ -292,8 +300,13 @@ from actuators.atomizer import Atomizer
 from services.camera import CameraManager
 from services.detector import TeachableMachineDetector
 from services.sampler import Sampler
-from services.oled import OledDisplay
 from sensors.EnvironmentController import DeviceController
+
+try:
+    from services.oled import OledDisplay
+except Exception as exc:
+    OledDisplay = None
+    log.warning("OLED support unavailable: %s", exc)
 
 atomizer = Atomizer(pin=ATOMIZER_PIN, active_high=ATOMIZER_ACTIVE_HIGH, initial=False)
 atexit.register(atomizer.cleanup)
@@ -303,8 +316,10 @@ _manual_overrides = {
 
 sampler = Sampler(interval_sec=SAMPLE_INTERVAL_SEC)
 sampler.start()
+atexit.register(sampler.stop)
 
 device_controller = DeviceController(HEATER_PIN, FAN_PIN, LED_PIN)
+atexit.register(device_controller.cleanup)
 
 camera_manager = CameraManager(device_indices=[0, 1])
 atexit.register(camera_manager.cleanup)
@@ -313,7 +328,13 @@ teachable_detector = TeachableMachineDetector(os.path.join(ROOT, "model"))
 camera_supervisor = CameraSupervisor(device_controller, camera_manager, teachable_detector)
 atexit.register(camera_supervisor.stop)
 
-oled = OledDisplay(bus=OLED_BUS, addr=OLED_ADDR, rotate=OLED_ROTATE, fps=OLED_FPS)
+oled = None
+if getattr(CFG, "OLED_ENABLE", True) and OledDisplay is not None:
+    try:
+        oled = OledDisplay(bus=OLED_BUS, addr=OLED_ADDR, rotate=OLED_ROTATE, fps=OLED_FPS)
+        atexit.register(oled.stop)
+    except Exception as exc:
+        log.warning("OLED initialization failed; continuing without display: %s", exc)
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
 
@@ -430,10 +451,10 @@ def api_atomizer():
 @app.route("/api/control", methods=["GET", "POST"])
 def api_control():
     """
-    供微信小程序或其他客户端使用的统一控制接口。
+    Unified control endpoint for the dashboard and other clients.
 
-    - GET 返回当前设备状态 + 手动指令剩余时间
-    - POST 接受 {device, state, duration_sec?}，会在 duration 内保持指定状态
+    GET returns current device and manual override state.
+    POST accepts {device, state, duration_sec?} and holds the requested state.
     """
     if request.method == "GET":
         return jsonify(
@@ -479,6 +500,8 @@ def api_control():
 @app.route("/api/oled/text")
 def api_oled_text():
     """Flash short text on the OLED for debugging."""
+    if oled is None:
+        return jsonify(ok=False, message="OLED is disabled or unavailable"), 503
     text = request.args.get("text") or ""
     if not text:
         return jsonify(ok=False, message="text required"), 400
@@ -517,72 +540,185 @@ def control_task():
         light = now.get("light")
         rh    = now.get("rh_air")
         growth_phase = camera_supervisor.growth_tracker.phase
-        phase_rules = GROWTH_PHASE_RULES.get(growth_phase, GROWTH_PHASE_RULES["unknown"])
-        fan_pid.setpoint = phase_rules.get("co2_target", CO2_SAFE_TARGET)
+        phase_rules = GROWTH_P…15841 tokens truncated… Sampler ─> Flask API ─> Browser dashboard
+VEML7700┘      │              └─> OLED
+               └─> CSV history
 
-        device_controller.update_environment(
-            temp1=t1,
-            temp2=t2,
-            co2_ppm=None,
-            light=light,
-            temp_set=TEMP_SETPOINT,
-            temp_tolerance=TEMP_TOLERANCE,
-            co2_high=phase_rules.get("co2_high", CO2_HIGH_THRESHOLD),
-            co2_low=phase_rules.get("co2_low", CO2_LOW_THRESHOLD),
-            manage_fan=False,
-        )
+USB cameras ─> OpenCV ─> TFLite classifier ─> Growth phase
+                                                │
+Sensor values + growth phase ─> Control rules ─> GPIO relays
+```
 
-        heater_manual = _get_override_state("heater")
-        fan_manual = _get_override_state("fan")
-        led_manual = _get_override_state("led")
+## Hardware
 
-        if heater_manual is not None:
-            device_controller.set_heater(heater_manual)
-        if led_manual is not None:
-            device_controller.set_led(led_manual)
+The default configuration targets a Raspberry Pi using BCM pin numbering.
 
-        atom_manual = _get_override_state("atomizer")
-        if atom_manual is not None:
-            atomizer.set(atom_manual)
-        else:
-            _control_atomizer_with_rh(rh)
+| Part | Interface / default |
+| --- | --- |
+| Heater relay | GPIO 27 |
+| Fan relay | GPIO 22 |
+| Camera LED relay | GPIO 23 |
+| Atomizer relay | GPIO 17, active-low |
+| SCD41 | I²C bus 1, address `0x62` or `0x64` |
+| VEML7700 | I²C bus 1, address `0x10` |
+| OLED | I²C bus 1, address `0x3C` |
+| DS18B20 probes | Linux 1-Wire, devices beginning with `28-` |
+| Cameras | USB camera indices 0 and 1 |
 
-        if fan_manual is not None:
-            device_controller.set_fan(fan_manual)
-        elif co2 is not None:
-            try:
-                co2_val = float(co2)
-            except (TypeError, ValueError):
-                co2_val = None
+> [!WARNING]
+> Relays may switch mains-powered heaters, fans, or humidifiers. Use an
+> appropriately rated, isolated relay module and have mains wiring completed by
+> a qualified person. Verify active-high/active-low behavior before attaching a
+> load.
 
-            if co2_val is None:
-                fan_pid.reset()
-            elif phase_rules.get("ventilate"):
-                device_controller.set_fan(co2_val > phase_rules.get("co2_low", CO2_SAFE_STOP))
-            else:
-                output = fan_pid.step(co2_val, SAMPLE_INTERVAL_SEC)
-                if co2_val <= phase_rules.get("co2_low", CO2_SAFE_STOP):
-                    device_controller.set_fan(False)
-                elif co2_val >= phase_rules.get("co2_high", CO2_HIGH_THRESHOLD):
-                    device_controller.set_fan(True)
-                else:
-                    device_controller.set_fan(output > 0)
-        else:
-            fan_pid.reset()
+## Software prerequisites
 
-        time.sleep(SAMPLE_INTERVAL_SEC)
+- Raspberry Pi OS Bookworm (64-bit recommended)
+- Python 3.11
+- I²C and 1-Wire enabled in `raspi-config`
+- A Teachable Machine TFLite model if vision detection is required
+- Internet access for the dashboard's Chart.js CDN, unless Chart.js is hosted
+  locally
 
+## Installation
 
-@app.before_first_request
-def _start_background_threads():
-    th = threading.Thread(target=control_task, name="env-control", daemon=True)
-    th.start()
-    log.info("Background env-control thread started")
-    camera_supervisor.start()
-    log.info("Camera supervisor thread started")
+```bash
+git clone https://github.com/Kevin-kaiquan/IOT_Project.git
+cd IOT_Project
 
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
 
-if __name__ == "__main__":
-    host, port = "0.0.0.0", 5000
-    log.info("Running on http://%s:%d", host, port)
-    app.run(host=host, port=port, debug=False)
+On Raspberry Pi OS, ensure the current user can access GPIO, I²C, 1-Wire, and
+video devices. A reboot is normally required after enabling hardware
+interfaces.
+
+## Vision model
+
+Create a `model/` directory and place these exported Teachable Machine files
+inside it:
+
+```text
+model/
+├── model.tflite
+└── labels.txt
+```
+
+Expected labels include `shiitake` (the common misspelling `shitake` is also
+accepted), `base`, `mold`, and `fly agaric`. The application still starts if
+the model is absent, but classification remains unavailable. See
+[`model/README.md`](model/README.md) for details.
+
+## Configuration
+
+Edit [`config.py`](config.py) before connecting loads. Important settings
+include:
+
+- GPIO pins and atomizer polarity
+- sampling and camera-detection intervals
+- sensor I²C addresses
+- CO₂ targets and stop thresholds
+- history length and CSV output directory
+- OLED enablement
+
+The growth-phase control table is currently defined in `app.py`:
+
+| Phase | Detection | CO₂ behavior |
+| --- | --- | --- |
+| Unknown | no stable label | targets about 700 ppm |
+| Mycelium | `base` | targets about 900 ppm |
+| Fruiting | fewer than five consecutive shiitake results | targets about 750 ppm |
+| Harvest | five or more consecutive shiitake results | ventilates toward about 500 ppm |
+
+These values are project defaults, not universal cultivation advice. Validate
+them for your mushroom strain, room, and equipment.
+
+## Run
+
+```bash
+python app.py
+```
+
+Open `http://<raspberry-pi-ip>:5000` from a device on the same network. The
+server listens on all interfaces and the control API has no authentication, so
+do not expose port 5000 directly to the public internet.
+
+The application records sensor samples in `history_data/`. An active file ends
+with `_active.csv`; it is renamed to `_complete.csv` during a clean shutdown.
+
+For dashboard/API development without starting the control and camera workers:
+
+```bash
+IOT_DISABLE_BACKGROUND=1 flask --app app run
+```
+
+## HTTP API
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/data` | Latest readings, in-memory history, device states, overrides, and vision status |
+| `GET` | `/api/camera/status` | Camera readiness |
+| `GET` | `/api/camera/<id>/frame` | Latest JPEG frame |
+| `GET` | `/api/control` | Device and override states |
+| `POST` | `/api/control` | Set a temporary manual override |
+| `GET` / `POST` | `/api/atomizer` | Direct atomizer state change |
+| `GET` | `/api/oled/text?text=Hello&sec=2` | Temporarily show OLED text |
+
+Example:
+
+```bash
+curl -X POST http://raspberrypi.local:5000/api/control \
+  -H "Content-Type: application/json" \
+  -d '{"device":"fan","state":"on","duration_sec":300}'
+```
+
+Request and response examples are documented in [`docs/API.md`](docs/API.md).
+
+## Project layout
+
+```text
+app.py                    Flask routes and control orchestration
+config.py                 Hardware and runtime defaults
+actuators/                GPIO output drivers
+sensors/                  SCD41, VEML7700, and DS18B20 drivers
+services/                 Camera, TFLite, sampling, and OLED services
+templates/index.html      Browser dashboard
+scripts/                  Hardware self-test utilities
+docs/API.md               HTTP API reference
+model/README.md           Local classifier setup
+```
+
+## Hardware self-tests
+
+Run only the test that matches the connected hardware:
+
+```bash
+python scripts/relay_selftest.py
+python scripts/temperature_selftest.py
+python scripts/oled_selftest.py
+```
+
+The relay test changes output states. Read
+[`scripts/README.md`](scripts/README.md) before running it.
+
+## Troubleshooting
+
+- **No I²C devices:** run `i2cdetect -y 1`, check wiring, and enable I²C.
+- **No DS18B20 devices:** verify 1-Wire is enabled and check
+  `/sys/bus/w1/devices/28-*`.
+- **No camera frame:** check `ls /dev/video*`, USB power, and camera permissions.
+- **No classifications:** confirm `model.tflite` and `labels.txt` exist and
+  install a TFLite runtime compatible with the Pi's Python version.
+- **OLED unavailable:** confirm address `0x3C`, or set `OLED_ENABLE = False` in
+  `config.py`.
+- **Mock CO₂ values:** the sampler uses mock CO₂ data when the SCD41 cannot be
+  read; inspect the application log for the underlying sensor error.
+
+## Status
+
+This is a prototype and educational project, not a certified environmental
+controller. Add authentication, fail-safe hardware, alerting, watchdogs, and
+equipment-specific limits before unattended or production use.
