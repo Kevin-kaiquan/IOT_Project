@@ -540,185 +540,89 @@ def control_task():
         light = now.get("light")
         rh    = now.get("rh_air")
         growth_phase = camera_supervisor.growth_tracker.phase
-        phase_rules = GROWTH_P…15841 tokens truncated… Sampler ─> Flask API ─> Browser dashboard
-VEML7700┘      │              └─> OLED
-               └─> CSV history
+        phase_rules = GROWTH_PHASE_RULES.get(growth_phase, GROWTH_PHASE_RULES["unknown"])
+        fan_pid.setpoint = phase_rules.get("co2_target", CO2_SAFE_TARGET)
 
-USB cameras ─> OpenCV ─> TFLite classifier ─> Growth phase
-                                                │
-Sensor values + growth phase ─> Control rules ─> GPIO relays
-```
+        device_controller.update_environment(
+            temp1=t1,
+            temp2=t2,
+            co2_ppm=None,
+            light=light,
+            temp_set=TEMP_SETPOINT,
+            temp_tolerance=TEMP_TOLERANCE,
+            co2_high=phase_rules.get("co2_high", CO2_HIGH_THRESHOLD),
+            co2_low=phase_rules.get("co2_low", CO2_LOW_THRESHOLD),
+            manage_fan=False,
+        )
 
-## Hardware
+        heater_manual = _get_override_state("heater")
+        fan_manual = _get_override_state("fan")
+        led_manual = _get_override_state("led")
 
-The default configuration targets a Raspberry Pi using BCM pin numbering.
+        if heater_manual is not None:
+            device_controller.set_heater(heater_manual)
+        if led_manual is not None:
+            device_controller.set_led(led_manual)
 
-| Part | Interface / default |
-| --- | --- |
-| Heater relay | GPIO 27 |
-| Fan relay | GPIO 22 |
-| Camera LED relay | GPIO 23 |
-| Atomizer relay | GPIO 17, active-low |
-| SCD41 | I²C bus 1, address `0x62` or `0x64` |
-| VEML7700 | I²C bus 1, address `0x10` |
-| OLED | I²C bus 1, address `0x3C` |
-| DS18B20 probes | Linux 1-Wire, devices beginning with `28-` |
-| Cameras | USB camera indices 0 and 1 |
+        atom_manual = _get_override_state("atomizer")
+        if atom_manual is not None:
+            atomizer.set(atom_manual)
+        else:
+            _control_atomizer_with_rh(rh)
 
-> [!WARNING]
-> Relays may switch mains-powered heaters, fans, or humidifiers. Use an
-> appropriately rated, isolated relay module and have mains wiring completed by
-> a qualified person. Verify active-high/active-low behavior before attaching a
-> load.
+        if fan_manual is not None:
+            device_controller.set_fan(fan_manual)
+        elif co2 is not None:
+            try:
+                co2_val = float(co2)
+            except (TypeError, ValueError):
+                co2_val = None
 
-## Software prerequisites
+            if co2_val is None:
+                fan_pid.reset()
+            elif phase_rules.get("ventilate"):
+                device_controller.set_fan(co2_val > phase_rules.get("co2_low", CO2_SAFE_STOP))
+            else:
+                output = fan_pid.step(co2_val, SAMPLE_INTERVAL_SEC)
+                if co2_val <= phase_rules.get("co2_low", CO2_SAFE_STOP):
+                    device_controller.set_fan(False)
+                elif co2_val >= phase_rules.get("co2_high", CO2_HIGH_THRESHOLD):
+                    device_controller.set_fan(True)
+                else:
+                    device_controller.set_fan(output > 0)
+        else:
+            fan_pid.reset()
 
-- Raspberry Pi OS Bookworm (64-bit recommended)
-- Python 3.11
-- I²C and 1-Wire enabled in `raspi-config`
-- A Teachable Machine TFLite model if vision detection is required
-- Internet access for the dashboard's Chart.js CDN, unless Chart.js is hosted
-  locally
+        time.sleep(SAMPLE_INTERVAL_SEC)
 
-## Installation
 
-```bash
-git clone https://github.com/Kevin-kaiquan/IOT_Project.git
-cd IOT_Project
+_background_started = False
+_background_lock = threading.Lock()
 
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-```
 
-On Raspberry Pi OS, ensure the current user can access GPIO, I²C, 1-Wire, and
-video devices. A reboot is normally required after enabling hardware
-interfaces.
+def _start_background_threads() -> None:
+    """Start control workers once for Flask 3 and direct execution."""
+    global _background_started
+    if not BACKGROUND_SERVICES_ENABLED:
+        return
+    with _background_lock:
+        if _background_started:
+            return
+        th = threading.Thread(target=control_task, name="env-control", daemon=True)
+        th.start()
+        camera_supervisor.start()
+        _background_started = True
+        log.info("Background control and camera threads started")
 
-## Vision model
 
-Create a `model/` directory and place these exported Teachable Machine files
-inside it:
+@app.before_request
+def _ensure_background_threads_started():
+    _start_background_threads()
 
-```text
-model/
-├── model.tflite
-└── labels.txt
-```
 
-Expected labels include `shiitake` (the common misspelling `shitake` is also
-accepted), `base`, `mold`, and `fly agaric`. The application still starts if
-the model is absent, but classification remains unavailable. See
-[`model/README.md`](model/README.md) for details.
+if __name__ == "__main__":
+    host, port = "0.0.0.0", 5000
+    _start_background_threads()
+    log.info("Running on http://%s:%d", host, port)
+    app.run(host=host, port=port, debug=False)
 
-## Configuration
-
-Edit [`config.py`](config.py) before connecting loads. Important settings
-include:
-
-- GPIO pins and atomizer polarity
-- sampling and camera-detection intervals
-- sensor I²C addresses
-- CO₂ targets and stop thresholds
-- history length and CSV output directory
-- OLED enablement
-
-The growth-phase control table is currently defined in `app.py`:
-
-| Phase | Detection | CO₂ behavior |
-| --- | --- | --- |
-| Unknown | no stable label | targets about 700 ppm |
-| Mycelium | `base` | targets about 900 ppm |
-| Fruiting | fewer than five consecutive shiitake results | targets about 750 ppm |
-| Harvest | five or more consecutive shiitake results | ventilates toward about 500 ppm |
-
-These values are project defaults, not universal cultivation advice. Validate
-them for your mushroom strain, room, and equipment.
-
-## Run
-
-```bash
-python app.py
-```
-
-Open `http://<raspberry-pi-ip>:5000` from a device on the same network. The
-server listens on all interfaces and the control API has no authentication, so
-do not expose port 5000 directly to the public internet.
-
-The application records sensor samples in `history_data/`. An active file ends
-with `_active.csv`; it is renamed to `_complete.csv` during a clean shutdown.
-
-For dashboard/API development without starting the control and camera workers:
-
-```bash
-IOT_DISABLE_BACKGROUND=1 flask --app app run
-```
-
-## HTTP API
-
-| Method | Endpoint | Purpose |
-| --- | --- | --- |
-| `GET` | `/api/data` | Latest readings, in-memory history, device states, overrides, and vision status |
-| `GET` | `/api/camera/status` | Camera readiness |
-| `GET` | `/api/camera/<id>/frame` | Latest JPEG frame |
-| `GET` | `/api/control` | Device and override states |
-| `POST` | `/api/control` | Set a temporary manual override |
-| `GET` / `POST` | `/api/atomizer` | Direct atomizer state change |
-| `GET` | `/api/oled/text?text=Hello&sec=2` | Temporarily show OLED text |
-
-Example:
-
-```bash
-curl -X POST http://raspberrypi.local:5000/api/control \
-  -H "Content-Type: application/json" \
-  -d '{"device":"fan","state":"on","duration_sec":300}'
-```
-
-Request and response examples are documented in [`docs/API.md`](docs/API.md).
-
-## Project layout
-
-```text
-app.py                    Flask routes and control orchestration
-config.py                 Hardware and runtime defaults
-actuators/                GPIO output drivers
-sensors/                  SCD41, VEML7700, and DS18B20 drivers
-services/                 Camera, TFLite, sampling, and OLED services
-templates/index.html      Browser dashboard
-scripts/                  Hardware self-test utilities
-docs/API.md               HTTP API reference
-model/README.md           Local classifier setup
-```
-
-## Hardware self-tests
-
-Run only the test that matches the connected hardware:
-
-```bash
-python scripts/relay_selftest.py
-python scripts/temperature_selftest.py
-python scripts/oled_selftest.py
-```
-
-The relay test changes output states. Read
-[`scripts/README.md`](scripts/README.md) before running it.
-
-## Troubleshooting
-
-- **No I²C devices:** run `i2cdetect -y 1`, check wiring, and enable I²C.
-- **No DS18B20 devices:** verify 1-Wire is enabled and check
-  `/sys/bus/w1/devices/28-*`.
-- **No camera frame:** check `ls /dev/video*`, USB power, and camera permissions.
-- **No classifications:** confirm `model.tflite` and `labels.txt` exist and
-  install a TFLite runtime compatible with the Pi's Python version.
-- **OLED unavailable:** confirm address `0x3C`, or set `OLED_ENABLE = False` in
-  `config.py`.
-- **Mock CO₂ values:** the sampler uses mock CO₂ data when the SCD41 cannot be
-  read; inspect the application log for the underlying sensor error.
-
-## Status
-
-This is a prototype and educational project, not a certified environmental
-controller. Add authentication, fail-safe hardware, alerting, watchdogs, and
-equipment-specific limits before unattended or production use.
