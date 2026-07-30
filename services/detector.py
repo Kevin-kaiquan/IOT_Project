@@ -11,10 +11,7 @@ import numpy as np
 try:  # pragma: no cover - runtime import guard
     from tflite_runtime.interpreter import Interpreter  # type: ignore
 except Exception:  # pragma: no cover - runtime import guard
-    try:
-        from tensorflow.lite import Interpreter  # type: ignore
-    except Exception:  # pragma: no cover - runtime import guard
-        Interpreter = None
+    Interpreter = None
 
 
 log = logging.getLogger(__name__)
@@ -98,7 +95,7 @@ class TeachableMachineDetector:
 
     def _load_interpreter(self):
         if Interpreter is None:
-            log.warning("TFLite interpreter unavailable; install tflite-runtime or TensorFlow")
+            log.warning("TFLite interpreter unavailable; install tflite-runtime")
             return None
         if not os.path.exists(self.model_path):
             log.warning("Model file missing: %s", self.model_path)
