@@ -129,15 +129,15 @@
       <div class="detection-panel">
         <div class="row spread">
           <div>
-            <div style="font-size:13px;color:var(--muted)">冬菇出现概率</div>
+            <div style="font-size:13px;color:var(--muted)">Shiitake probability</div>
             <div class="value small" id="mushroomProb">--</div>
           </div>
-          <div class="chip" id="lastDetect">检测时间: --</div>
+          <div class="chip" id="lastDetect">Last detection: --</div>
         </div>
-        <div class="progress" aria-label="冬菇概率">
+        <div class="progress" aria-label="Shiitake probability">
           <div class="progress-bar" id="mushroomProbBar"></div>
         </div>
-        <div class="growth-info" id="growthInfo">等待检测数据…</div>
+        <div class="growth-info" id="growthInfo">Waiting for detection data…</div>
         <div class="contaminant-list" id="contaminantList"></div>
         <div class="target-quick" id="targetQuick"></div>
       </div>
@@ -145,7 +145,7 @@
 
     <div class="card" data-area="temp">
       <div class="row spread">
-        <div style="font-weight:700">Probe Temperatures (±Wire)</div>
+        <div style="font-weight:700">Probe Temperatures (DS18B20)</div>
         <div class="chip" id="envTemp">Ambient: -- °C</div>
       </div>
       <div class="row" style="margin-top:8px">
@@ -164,7 +164,7 @@
     </div>
 
     <div class="card" data-area="light">
-      <div class="row"><div style="font-weight:700">Light (VELM7700)</div></div>
+      <div class="row"><div style="font-weight:700">Light (VEML7700)</div></div>
       <div class="value" id="light">-- lux</div>
       <canvas id="lightChart"></canvas>
     </div>
@@ -302,22 +302,22 @@ function updateBoundingBox(now, detection={}){
   }
 
   const metrics = [
-    {label:'温度', value: tempAvg, ideal:{value: IDEAL.temp_c, range: IDEAL.temp_range}, unit:'°C', tolerance:1},
-    {label:'湿度', value: humidity, ideal:{value: IDEAL.humidity, range: IDEAL.humidity_range}, unit:'%RH', tolerance:5},
+    {label:'Temperature', value: tempAvg, ideal:{value: IDEAL.temp_c, range: IDEAL.temp_range}, unit:'°C', tolerance:1},
+    {label:'Humidity', value: humidity, ideal:{value: IDEAL.humidity, range: IDEAL.humidity_range}, unit:'%RH', tolerance:5},
     {label:'CO₂', value: co2, ideal:{value: IDEAL.co2_ppm, range: IDEAL.co2_range}, unit:'ppm', tolerance:500},
-    {label:'光照', value: light, ideal:{value: IDEAL.light_lux, range: IDEAL.light_range}, unit:'lux', tolerance:25},
+    {label:'Light', value: light, ideal:{value: IDEAL.light_lux, range: IDEAL.light_range}, unit:'lux', tolerance:25},
   ];
 
   const lines = [];
 
   if(isBase){
-    lines.push('<span class="bbox-line">检测到 base · 菌丝生长期间</span>');
+    lines.push('<span class="bbox-line">Base detected · assumed mycelium stage</span>');
   }else if(isNeutral){
-    lines.push(`<span class="bbox-line">标签: ${detectionLabel || '未知'}</span>`);
+    lines.push(`<span class="bbox-line">Label detected: ${detectionLabel || 'unknown'}</span>`);
   }else{
     const header = isTarget
-      ? `Shiitake 置信度 ${formatPercent(detectionProb || detection.mushroom_confidence)}`
-      : '等待清晰画面…';
+      ? `Shiitake confidence ${formatPercent(detectionProb || detection.mushroom_confidence)}`
+      : 'Waiting for a clear frame…';
     lines.push(`<span class="bbox-line">${header}</span>`);
 
     metrics.forEach(m=>{
@@ -325,7 +325,7 @@ function updateBoundingBox(now, detection={}){
       const cls = inRange ? '' : 'metric-alert';
       const valueText = m.value==null ? '--' : `${m.value.toFixed(1)}${m.unit}`;
       const idealText = m.ideal.range || `${m.ideal.value}${m.unit}`;
-      lines.push(`<span class="bbox-line ${cls}">${m.label}: ${valueText} · 目标 ${idealText}</span>`);
+      lines.push(`<span class="bbox-line ${cls}">${m.label}: ${valueText} · Target ${idealText}</span>`);
     });
   }
 
@@ -337,9 +337,9 @@ function updateBoundingBox(now, detection={}){
 function renderTargetQuick(){
   if(!targetQuickEl) return;
   const metrics = [
-    {label:'温度陡度指数', desc:'T_env - T_deep，过高会抑制生长、损耗营养'},
-    {label:'CO₂ 变化率', desc:'ΔCO₂ / Δt，急升或急降提示风机/气体调节阶段'},
-    {label:'湿度稳定指数', desc:'std(24h humidity)，数值越低越平稳'},
+    {label:'Temperature gradient', desc:'T_env - T_deep; high values may slow growth'},
+    {label:'CO₂ rate of change', desc:'ΔCO₂ / Δt highlights ventilation shifts'},
+    {label:'Humidity stability', desc:'A lower 24-hour standard deviation means steadier humidity'},
   ];
   targetQuickEl.innerHTML = metrics.map(m=>`<div class="target-chip"><strong>${m.label}</strong><span>${m.desc}</span></div>`).join('');
 }
@@ -369,18 +369,18 @@ function renderDetection(cameraData={}){
   const growthPhase = cameraData.growth_phase || detection.growth_phase || {};
   const phaseName = (growthPhase.phase || 'unknown').toLowerCase();
   const phaseText = {
-    unknown:'生长阶段待确认',
-    mycelium:'菌丝生长期',
-    fruiting:'出菇期',
-    harvest:'收获/通风期'
-  }[phaseName] || '生长阶段待确认';
+    unknown:'Phase pending',
+    mycelium:'Mycelium growth',
+    fruiting:'Fruiting',
+    harvest:'Harvest / ventilation'
+  }[phaseName] || 'Phase pending';
 
   if(mushroomProbEl) mushroomProbEl.textContent = isBase ? 'base' : (isNeutral ? (label || '--') : formatPercent(mushProb));
   if(mushroomProbBarEl) setProgressBar(mushroomProbBarEl, isBase || isNeutral ? 0 : mushProb, false);
 
   if(lastDetectEl){
     const ts = cameraData.last_detection_ts ? new Date(cameraData.last_detection_ts*1000) : null;
-    lastDetectEl.textContent = ts ? `检测时间: ${ts.toLocaleTimeString()}` : '检测时间: --';
+    lastDetectEl.textContent = ts ? `Last detection: ${ts.toLocaleTimeString()}` : 'Last detection: --';
   }
 
   if(contaminantListEl){
@@ -391,7 +391,7 @@ function renderDetection(cameraData={}){
         const row = document.createElement('div');
         row.className = 'contam-row';
         row.innerHTML = `
-          <div class="row"><div>${item.name || '污染物'}</div><div class="pill compact">${formatPercent(prob)}</div></div>
+          <div class="row"><div>${item.name || 'Contaminant'}</div><div class="pill compact">${formatPercent(prob)}</div></div>
           <div class="progress small"><div class="progress-bar danger" style="width:${(Math.max(0, Math.min(1, prob))*100).toFixed(1)}%"></div></div>
         `;
         contaminantListEl.appendChild(row);
@@ -402,19 +402,19 @@ function renderDetection(cameraData={}){
   if(growthInfoEl){
     if(isBase){
       growthInfoEl.classList.add('active');
-      growthInfoEl.textContent = '检测到 base · 默认为菌丝生长期间';
+      growthInfoEl.textContent = 'Base detected · assuming mycelium stage';
     }else if(isNeutral){
       growthInfoEl.classList.remove('active');
-      growthInfoEl.textContent = `检测到标签 ${label || '--'}，保持监测。`;
+      growthInfoEl.textContent = `Label detected: ${label || '--'}. Monitoring continues.`;
     }else if(phaseName === 'harvest'){
       growthInfoEl.classList.add('active');
-      growthInfoEl.textContent = '持续识别到冬菇，进入收获/通风阶段，风机将保持通风以将 CO₂ 控制在约 500 ppm。';
+      growthInfoEl.textContent = 'Consistent shiitake detections; harvesting ventilation holds CO₂ around 500 ppm.';
     }else if(isTarget && mushProb >= 0.8){
       growthInfoEl.classList.add('active');
-      growthInfoEl.innerHTML = `${phaseText} · 冬菇概率 ${formatPercent(mushProb)}，维持温度 ${IDEAL.temp_range || `${formatNumber(IDEAL.temp_c,1)}°C`}、湿度 ${IDEAL.humidity_range || `${formatNumber(IDEAL.humidity,1)}%RH`}、CO₂ ${IDEAL.co2_range || `${formatNumber(IDEAL.co2_ppm,0)} ppm`}、光照 ${IDEAL.light_range || `${formatNumber(IDEAL.light_lux,0)} lux`}。`;
+      growthInfoEl.innerHTML = `${phaseText} · Shiitake probability ${formatPercent(mushProb)}. Keep temperature ${IDEAL.temp_range || `${formatNumber(IDEAL.temp_c,1)}°C`}, humidity ${IDEAL.humidity_range || `${formatNumber(IDEAL.humidity,1)}%RH`}, CO₂ ${IDEAL.co2_range || `${formatNumber(IDEAL.co2_ppm,0)} ppm`}, and light ${IDEAL.light_range || `${formatNumber(IDEAL.light_lux,0)} lux`}.`;
     }else{
       growthInfoEl.classList.remove('active');
-      growthInfoEl.textContent = `${phaseText} · 冬菇概率不足 0.8，等待清晰画面后再展示生长信息…`;
+      growthInfoEl.textContent = `${phaseText} · Shiitake probability is below 0.8; waiting for a clearer frame.`;
     }
   }
 }
@@ -560,3 +560,4 @@ setInterval(refreshCameraFrame, 3000);
 </script>
 </body>
 </html>
+
