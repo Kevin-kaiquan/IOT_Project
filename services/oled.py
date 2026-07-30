@@ -59,6 +59,8 @@ class OledDisplay:
     def stop(self):
         self._running = False
         self._evt.set()
+        if self._t.is_alive():
+            self._t.join(timeout=1.0)
 
     def flash(self, text: str, sec: float = 2.0):
         """Temporarily overlay text for a short duration."""
@@ -145,7 +147,7 @@ class OledDisplay:
                 self._flash_text = None
 
             if (now - self._last_page_ts) >= float(PAGE_HOLD_SECS):
-                self._page = (self._page + 1) % 3
+                self._page = (self._page + 1) % 4
                 self._last_page_ts = now
                 self._page_img = None
 
